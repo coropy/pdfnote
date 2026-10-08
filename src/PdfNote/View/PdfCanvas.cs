@@ -12,7 +12,9 @@ using Microsoft.UI.Xaml.Input;
 using Windows.Foundation;
 using Windows.Graphics.DirectX;
 using Windows.UI;
+using Microsoft.UI.Input;
 using PdfNote.Core;
+using PdfNote.Input;
 
 namespace PdfNote.View;
 
@@ -55,6 +57,12 @@ public sealed class PdfCanvas : UserControl
 
     /// <summary>ズーム操作が落ち着いた (UI スレッド)。</summary>
     public event Action<double>? ZoomSettled;
+
+    /// <summary>ペン入力イベント (Ink Layer への転送。UI スレッド)。</summary>
+    public event Action<InkPointerEvent>? InkPointerReceived;
+
+    /// <summary>Ink 描画タイミング。session.Transform はページ pt 空間で呼ばれる (UI スレッド)。</summary>
+    public event Action<Microsoft.Graphics.Canvas.CanvasDrawingSession>? InkDrawing;
 
     public double DisplayPxPerPt => _displayPxPerPt;
 
@@ -171,6 +179,9 @@ public sealed class PdfCanvas : UserControl
         _canvas.Invalidate();
     }
 
+    /// <summary>再描画要求 (Ink Layer から)。</summary>
+    public void Invalidate() => _canvas.Invalidate();
+
     /// <summary>レンダリング済みフレームを GPU テクスチャとして設定する (UI スレッド専用)。</summary>
     public void SetFrame(RenderedFrame frame)
     {
@@ -192,7 +203,18 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        _activePointers[e.Pointer.PointerId] = e.GetCurrentPoint(_canvas).Position.ToVector2();
+        var point = e.GetCurrentPoint(_canvas);
+
+        // ペンは Ink Layer へ転送 (パン/ズームとは独立)。
+        if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+        {
+            _canvas.CapturePointer(e.Pointer);
+            DispatchInkEvent(e, point, InkPhase.Pressed);
+            e.Handled = true;
+            return;
+        }
+
+        _activePointers[e.Pointer.PointerId] = point.Position.ToVector2();
         _canvas.CapturePointer(e.Pointer);
         if (_activePointers.Count == 2)
         {
@@ -203,12 +225,22 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        var point = e.GetCurrentPoint(_canvas);
+
+        // ペンは Ink Layer へ転送 (hover 含む。InkSession 側で接触状態を判定する)。
+        if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+        {
+            DispatchInkEvent(e, point, InkPhase.Moved);
+            e.Handled = true;
+            return;
+        }
+
         if (!_activePointers.TryGetValue(e.Pointer.PointerId, out var previous))
         {
             return;
         }
 
-        var current = e.GetCurrentPoint(_canvas).Position.ToVector2();
+        var current = point.Position.ToVector2();
         _activePointers[e.Pointer.PointerId] = current;
 
         if (_activePointers.Count == 1)
@@ -225,17 +257,64 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+        {
+            DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Released);
+            _canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+
         RemovePointer(e);
     }
 
     private void OnPointerCanceled(object sender, PointerRoutedEventArgs e)
     {
+        if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+        {
+            DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Canceled);
+            _canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+
         RemovePointer(e);
     }
 
     private void OnPointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
+        if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
+        {
+            DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Canceled);
+            return;
+        }
+
         RemovePointer(e);
+    }
+
+    private void DispatchInkEvent(PointerRoutedEventArgs e, Microsoft.UI.Input.PointerPoint point, InkPhase phase)
+    {
+        if (InkPointerReceived is null)
+        {
+            return;
+        }
+
+        var position = point.Position.ToVector2();
+        var pagePt = _pageWidthPt > 0
+            ? (position - _panOffset) / (float)_displayPxPerPt
+            : Vector2.Zero;
+
+        var inkEvent = new InkPointerEvent(
+            phase,
+            PointerKind.Pen,
+            e.Pointer.PointerId,
+            pagePt.X,
+            pagePt.Y,
+            point.Properties.Pressure,
+            point.Properties.IsBarrelButtonPressed,
+            point.Properties.IsEraser);
+
+        InkPointerReceived.Invoke(inkEvent);
     }
 
     private void OnPointerWheelChanged(object sender, PointerRoutedEventArgs e)
@@ -266,6 +345,15 @@ public sealed class PdfCanvas : UserControl
 
         // ページ外枠 (ズームで線幅が変わらないように逆スケール)。
         session.DrawRectangle(0f, 0f, (float)size.Width, (float)size.Height, BorderColor, 1f / Math.Max(scale, 0.0001f));
+
+        // Ink Layer (PDF テクスチャと独立の合成パス)。
+        if (InkDrawing is not null && _pageWidthPt > 0)
+        {
+            var previousTransform = session.Transform;
+            session.Transform = Matrix3x2.CreateScale((float)_displayPxPerPt) * Matrix3x2.CreateTranslation(_panOffset);
+            InkDrawing.Invoke(session);
+            session.Transform = previousTransform;
+        }
     }
 
     private void OnCreateResources(CanvasControl sender, CanvasCreateResourcesEventArgs args)

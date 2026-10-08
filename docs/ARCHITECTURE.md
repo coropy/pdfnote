@@ -1,6 +1,6 @@
 # PdfNote アーキテクチャ（docs/ARCHITECTURE.md）
 
-最終更新: v0.1 (Phase 1)
+最終更新: v0.2 (Phase 2)
 
 ## 1. レイヤー構成
 
@@ -95,6 +95,36 @@ Docnetは内部の `DocLib.Lock` で全PDFium呼び出しを直列化するた�
 
 ## 7. 拡張ポイント（過剰抽象化はしない）
 
-- v0.2 Ink Layer: `PdfCanvas` にインク描画パスを追加（ストロークはPDFテクスチャと独立のジオメトリでGPU合成）
 - v0.3 Storage Layer: `PdfSession` の状態更新をフックしてデバウンス保存
 - 先読み: `PdfSession.RequestRender` の呼び出し側に設定フラグを追加するだけで可能な設計
+
+## 8. Ink パイプライン (v0.2)
+
+PDF Renderer と Ink Renderer は完全に独立している。
+
+```
+Pointer (PdfCanvas)
+    │  ペン: X/Y(pt), Pressure, PointerId, 種別, バレル/裏消しゴム
+    ▼
+InkPointerEvent ──▶ InkSession
+    │                     │
+    │        Input Layer  │  InkToolController (基本ツール+一時上書き)
+    │        PenButtonMap ┘  InputAction: TemporaryEraser / Undo / Pan ...
+    ▼
+Ink Model (InkDocument ─ InkPage └ Stroke[] / readonly struct InkPoint)
+    │  Add/RemoveStroke Operation (Undo/Redo 256)
+    ▼
+Ink Renderer
+    ├─ 完成ストローク: ページ単位 Ink Texture (CanvasRenderTarget)
+    └─ 描画中ストローク: セグメント直接描画
+    ▼
+GPU 合成 (PdfCanvas.OnDraw: PDF Texture + Ink → 1フレームに統合)
+```
+
+| コンポーネント | 責務 |
+|---|---|
+| PdfCanvas (Ink部) | ポインタ情報の抽出と pt 座標変換、Ink描画コールバックの起動 |
+| InkPointerEvent | 入力の転送形式 (struct) |
+| PenButtonMap / InkToolController | ペンボタン→InputAction→機能、基本ツール+TemporaryEraserの状態機械 |
+| InkSession | Ink Model の所有、Undo/Redo、消しゴムヒットテスト、描画指示 |
+| InkRenderer | Ink Texture 管理とGPU描画 (PDFに非依存) |

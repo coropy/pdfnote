@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using PdfNote.Core;
 using PdfNote.Diagnostics;
+using PdfNote.Ink;
 using PdfNote.Session;
 using PdfNote.View;
 using Windows.System;
@@ -18,6 +19,7 @@ public sealed partial class MainWindow : Window
     private readonly PdfSession _session = new();
     private readonly PdfCanvas _canvas;
     private readonly PerfMonitor _perf = new();
+    private readonly InkSession _ink;
     private readonly Stopwatch _stopwatch = new();
     private bool _dialogOpen;
 
@@ -28,6 +30,21 @@ public sealed partial class MainWindow : Window
 
         _canvas = new PdfCanvas();
         ContentHost.Children.Insert(0, _canvas);
+
+        _ink = new InkSession(_canvas, _perf);
+        _ink.ToolChanged += SyncToolButtons;
+        _ink.UndoRedoChanged += (_, _) => DispatcherQueue.TryEnqueue(UpdateToolbar);
+        _ink.PageActionRequested += next => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (next)
+            {
+                _session.NextPage();
+            }
+            else
+            {
+                _session.PreviousPage();
+            }
+        });
 
         _canvas.DisplayScaleChanged += OnCanvasDisplayScaleChanged;
         _canvas.ZoomSettled += OnCanvasZoomSettled;
@@ -82,7 +99,15 @@ public sealed partial class MainWindow : Window
 
     private void OnCanvasZoomSettled(double pxPerPt) => _session.OnZoomSettled();
 
-    private void OnCurrentPageChanged(int page) => DispatcherQueue.TryEnqueue(UpdateToolbar);
+    private void OnCurrentPageChanged(int page) => DispatcherQueue.TryEnqueue(() =>
+    {
+        if (_session.HasDocument)
+        {
+            var (widthPt, heightPt) = _session.GetPageSizePt(page);
+            _ink.SetPage(page, widthPt, heightPt);
+        }
+        UpdateToolbar();
+    });
 
     private void OnOpenClick(object sender, RoutedEventArgs e) => _ = OpenPdfAsync();
 
@@ -96,6 +121,23 @@ public sealed partial class MainWindow : Window
 
     private void OnFpsToggleClick(object sender, RoutedEventArgs e) =>
         SetPerfOverlay(FpsToggle.IsChecked == true);
+
+    private void OnPenToolClick(object sender, RoutedEventArgs e) => _ink.SetTool(InkTool.Pen);
+
+    private void OnEraserToolClick(object sender, RoutedEventArgs e) => _ink.SetTool(InkTool.Eraser);
+
+    private void OnUndoClick(object sender, RoutedEventArgs e) => _ink.Undo();
+
+    private void OnRedoClick(object sender, RoutedEventArgs e) => _ink.Redo();
+
+    private void SyncToolButtons(InkTool tool)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            PenToolButton.IsChecked = tool == InkTool.Pen;
+            EraserToolButton.IsChecked = tool == InkTool.Eraser;
+        });
+    }
 
     private void ZoomIn() => _canvas.SetDisplayScale(_canvas.DisplayPxPerPt * 1.25);
 
@@ -120,6 +162,12 @@ public sealed partial class MainWindow : Window
         ZoomText.Text = $"{ZoomPercent:F0}%";
         PrevButton.IsEnabled = _session.HasDocument && _session.CurrentPage > 0;
         NextButton.IsEnabled = _session.HasDocument && _session.CurrentPage < _session.PageCount - 1;
+        UndoButton.IsEnabled = _ink.CanUndo;
+        RedoButton.IsEnabled = _ink.CanRedo;
+        PenToolButton.IsEnabled = _session.HasDocument;
+        EraserToolButton.IsEnabled = _session.HasDocument;
+        PenToolButton.IsChecked = _ink.CurrentTool == InkTool.Pen;
+        EraserToolButton.IsChecked = _ink.CurrentTool == InkTool.Eraser;
     }
 
     private async Task OpenPdfAsync()
@@ -142,6 +190,8 @@ public sealed partial class MainWindow : Window
 
             var (widthPt, heightPt) = _session.GetPageSizePt(_session.CurrentPage);
             _canvas.SetPageGeometry(widthPt, heightPt);
+            _ink.ResetDocument();
+            _ink.SetPage(_session.CurrentPage, widthPt, heightPt);
             _canvas.FitToViewport();
             // 初回レンダリングを保証 (同じ値でも強制評価)。
             _session.SetDesiredScale(_canvas.DisplayPxPerPt, force: true);
@@ -186,6 +236,8 @@ public sealed partial class MainWindow : Window
     private void RegisterShortcuts()
     {
         Add(VirtualKey.O, VirtualKeyModifiers.Control, () => _ = OpenPdfAsync());
+        Add(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ink.Undo());
+        Add(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ink.Redo());
         Add(VirtualKey.PageUp, VirtualKeyModifiers.None, () => _session.PreviousPage());
         Add(VirtualKey.PageDown, VirtualKeyModifiers.None, () => _session.NextPage());
         Add(VirtualKey.Home, VirtualKeyModifiers.None, () => _session.FirstPage());

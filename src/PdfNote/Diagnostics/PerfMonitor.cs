@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using Microsoft.UI.Dispatching;
 
 namespace PdfNote.Diagnostics;
@@ -21,6 +22,9 @@ public sealed class PerfMonitor
     private double _frameMaxMs;
     private double _lastRenderMs = -1;
     private double _lastUploadMs = -1;
+    private double _lastInkMs = -1;
+    private int _pointerEvents;
+    private int _strokePoints;
     private Func<string>? _extraProvider;
 
     /// <summary>CompositionTarget.Rendering ハンドラから呼び出す。</summary>
@@ -51,6 +55,15 @@ public sealed class PerfMonitor
     /// <summary>GPU テクスチャ (CanvasBitmap) 生成時間 (ms) を記録する。</summary>
     public void RecordUpload(double milliseconds) => _lastUploadMs = milliseconds;
 
+    /// <summary>Ink 描画時間 (ms) を記録する。</summary>
+    public void RecordInkDraw(double milliseconds) => _lastInkMs = milliseconds;
+
+    /// <summary>ポインタイベント発生を記録する。</summary>
+    public void RecordPointerEvent() => Interlocked.Increment(ref _pointerEvents);
+
+    /// <summary>ストロークポイント追加を記録する。</summary>
+    public void RecordStrokePoint() => Interlocked.Increment(ref _strokePoints);
+
     /// <summary>集計テキストに追加情報 (ズーム/キャッシュ等) を混ぜるプロバイダ。</summary>
     public void SetExtraProvider(Func<string>? provider) => _extraProvider = provider;
 
@@ -74,10 +87,14 @@ public sealed class PerfMonitor
         var maxFrame = _frameMaxMs;
 
         // ウィンドウをリセット
+        var pointerRate = _frames > 0 && elapsed > 0 ? _pointerEvents * 1000.0 / elapsed : 0.0;
+        var pointRate = _frames > 0 && elapsed > 0 ? _strokePoints * 1000.0 / elapsed : 0.0;
         _windowStartMs = now;
         _frames = 0;
         _frameSumMs = 0;
         _frameMaxMs = 0;
+        _pointerEvents = 0;
+        _strokePoints = 0;
 
         _process.Refresh();
         var workingSetMb = _process.WorkingSet64 / (1024.0 * 1024.0);
@@ -85,11 +102,13 @@ public sealed class PerfMonitor
 
         var render = _lastRenderMs < 0 ? "-" : $"{_lastRenderMs:F0} ms";
         var upload = _lastUploadMs < 0 ? "-" : $"{_lastUploadMs:F0} ms";
+        var ink = _lastInkMs < 0 ? "-" : $"{_lastInkMs:F1} ms";
         var extra = _extraProvider?.Invoke() ?? string.Empty;
 
         return
             $"FPS {fps,5:F1}   Frame avg {avgFrame,5:F1} ms (max {maxFrame,5:F1})\n" +
-            $"PDF render {render}   GPU upload {upload}\n" +
+            $"PDF render {render}   GPU upload {upload}   Ink {ink}\n" +
+            $"Pointer {pointerRate,5:F0}/s   Points {pointRate,5:F0}/s\n" +
             $"Memory {workingSetMb:F0} MB (managed {managedMb:F0} MB)" +
             (string.IsNullOrEmpty(extra) ? string.Empty : "\n" + extra);
     }

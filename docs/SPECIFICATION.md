@@ -1,6 +1,6 @@
 # PdfNote 仕様書（docs/SPECIFICATION.md）
 
-最終更新: v0.1 (Phase 1)
+最終更新: v0.2 (Phase 2)
 
 ## 1. プロジェクト概要
 
@@ -21,7 +21,7 @@
 | 項目 | 要件 |
 |---|---|
 | OS | Windows 11 |
-| CPU | Intel N100 |
+| CPU | Intel N200 |
 | GPU | Intel UHD Graphics (内蔵) |
 | ディスプレイ | 1920x1080 (FHD) |
 | 入力 | ペン対応ディスプレイ / ペンタブレット、マウス、タッチ |
@@ -36,19 +36,20 @@
 
 ## 3. 機能一覧
 
-| 機能 | v0.1 | 今後 |
-|---|---|---|
-| PDFを開く (ローカル) | ✅ | - |
-| 1ページ表示 | ✅ | - |
-| ページ移動 | ✅ | - |
-| ズーム (ホイール/ピンチ/+/-) | ✅ | - |
-| パン (ドラッグ) | ✅ | - |
-| FPSオーバーレイ | ✅ | - |
-| ペン / 消しゴム / 筆圧 | - | v0.2 |
-| Undo / Redo | - | v0.2 |
-| .note保存 / 自動保存 | - | v0.3 |
-| ペンボタン割り当て | - | v0.4 |
-| 蛍光ペン / PDF書き出し / 設定画面 | - | v1.0 |
+| 機能 | v0.1 | v0.2 | 今後 |
+|---|---|---|---|
+| PDFを開く (ローカル) | ✅ | ✅ | - |
+| 1ページ表示 | ✅ | ✅ | - |
+| ページ移動 | ✅ | ✅ | - |
+| ズーム (ホイール/ピンチ/+/-) | ✅ | ✅ | - |
+| パン (ドラッグ) | ✅ | ✅ | - |
+| FPSオーバーレイ | ✅ | ✅(拡張) | - |
+| ペン / 筆圧 / Ink Texture合成 | - | ✅ | - |
+| 消しゴム (Stroke単位) | - | ✅ | v1.0で部分消去 |
+| Undo / Redo (Ctrl+Z / Ctrl+Y) | - | ✅ | - |
+| ペンボタン (InputAction割当/TemporaryEraser) | - | ✅ | v0.4で設定UI |
+| .note保存 / 自動保存 | - | - | v0.3 |
+| 蛍光ペン / PDF書き出し / 設定画面 | - | - | v1.0 |
 
 ## 4. 非機能要件
 
@@ -100,20 +101,57 @@ PDF ─▶ PDF Renderer (バックグラウンドスレッド, PDFium)
 - ズーム中は**既存GPUテクスチャを行列変換で拡大縮小**し、PDFを再レンダリングしない
 - ズーム停止後350msで、要求解像度とキャッシュ解像度の比率が15%以上乖離していたらバックグラウンドで再レンダリング
 
-## 8. 入力仕様（v0.1）
+## 8. 入力仕様
 
 | 入力 | 動作 |
 |---|---|
-| マウス左ドラッグ / タッチ1指 / ペンドラッグ | パン |
+| ペン (先端) | 手書き (ツール: ペン/消しゴム) |
+| ペン (裏ボタン / バレルボタン) | InputAction を実行 (既定: TemporaryEraser) |
+| ペン (裏消しゴム端 IsEraser) | 消しゴム |
+| マウス左ドラッグ / タッチ1指 / ペン(Panアクション中) | パン |
 | ホイール / ピンチ (2指) | ズーム（ポインタ位置中心） |
 | PageUp / PageDown / Home / End | ページ移動 |
 | +/- (Ctrl含む) | ズーム |
 | Ctrl+O | PDFを開く |
+| Ctrl+Z / Ctrl+Y | Undo / Redo |
 | Esc | パン/ズーム操作のリセット（フィットに戻す） |
 | F9 | FPSオーバーレイ切替 |
 | F10 | ツールバー表示切替 |
 
-v0.2以降のペン入力では X/Y/筆圧/開始/移動/終了/デバイス種別/ボタン状態 を `PointerEventArgs` から取得する設計とする。
+ペン入力から取得する情報: X/Y (ページpt座標)、Pressure (0..1)、Pointer ID、ポインタ種別 (Pen/Mouse/Touch)、バレルボタン状態、裏消しゴム端 (IsEraser)、pressed/moved/released 各フェーズ。
+
+### 8.1 InputAction (ペンボタン割当)
+
+入力と機能は分離し、ペンボタン → `InputAction` → 機能実行の順で処理する。
+
+| InputAction | 内容 |
+|---|---|
+| None / Pen / Eraser | 動作なし / ツール一時変更 (押している間) |
+| TemporaryEraser | 押している間だけ消しゴム (既定) |
+| Highlighter | 一時変更 (v1.0) |
+| Undo / Redo | 操作実行 |
+| PreviousPage / NextPage | ページ移動 |
+| Pan | 押している間パン |
+| RightClick / CustomShortcut | 将来拡張 |
+
+ツール状態は「基本ツール + 一時上書き」の状態機械で管理し、設定変更時にInk Layer自体を変更しない。
+
+## 8.2 Ink Model (v0.2)
+
+- 階層: `InkDocument ─ InkPage(PageIndex) └ Stroke[]`
+- Stroke: PageIndex、Points、Pressure、Width(pt)、Color、Tool、Timestamp
+- `InkPoint` は `readonly struct` (Vector2 + Pressure) — ポイント単位のオブジェクト生成なし
+- 座標はページpt座標 → ズーム/パン/再レンダリングに影響されない
+- 消しゴムは Stroke 単位消去 (v0.2)。部分消去は将来拡張
+- Undo/Redoは Operation 単位 (AddStroke / RemoveStroke)。上限256操作
+- ペン入力中は PDF再レンダリング / Bitmap再生成 / ファイルI/O / LINQを一切行わない
+
+## 8.3 Ink Renderer (v0.2)
+
+- 完成ストロークはページ単位の **Ink Texture (CanvasRenderTarget)** に焼く
+- 描画中ストロークはセグメント単位で直接描画 (テクスチャへの書き込みはストローク完成時のみ)
+- ズーム確定時のみ Ink Texture を再構築 (スケール乖離25%超の場合)
+- PDF Texture はペン入力中一切変更されない
 
 ## 9. 手書きデータ / 保存仕様（v0.2〜設計、v0.1では実装なし）
 
@@ -170,3 +208,5 @@ Windows.Data.Pdfを第一候補から除外した理由: レンダリングがUI
 
 FPS・frame time・PDF render time・GPU upload time・ワーキングセット/管理メモリ・キャッシュ使用量を
 オーバーレイで常時確認可能（F9）。最適化は必ず実測値を根拠にする。
+
+v0.2追加計測項目: Pointer event rate / Stroke point rate / Ink render time。
