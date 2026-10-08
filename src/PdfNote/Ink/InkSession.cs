@@ -3,6 +3,7 @@ using System.Numerics;
 using PdfNote.Core;
 using PdfNote.Diagnostics;
 using PdfNote.Input;
+using PdfNote.Storage;
 using PdfNote.View;
 
 namespace PdfNote.Ink;
@@ -55,6 +56,9 @@ public sealed class InkSession
     /// <summary>Undo/Redo 可否が変わった (UI 更新用)。</summary>
     public event Action<bool, bool>? UndoRedoChanged;
 
+    /// <summary>手書き内容が変化した (自動保存トリガー、UI スレッド)。</summary>
+    public event Action? ContentChanged;
+
     public InkTool CurrentTool => _tools.CurrentTool;
 
     public bool CanUndo => _undo.CanUndo;
@@ -76,9 +80,9 @@ public sealed class InkSession
         {
             _renderer.MarkPageDirty(StrokePageIndex(operation));
             _canvas.Invalidate();
+            UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
+            ContentChanged?.Invoke();
         }
-
-        UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
     }
 
     /// <summary>Redo 操作。</summary>
@@ -94,9 +98,9 @@ public sealed class InkSession
         {
             _renderer.MarkPageDirty(StrokePageIndex(operation));
             _canvas.Invalidate();
+            UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
+            ContentChanged?.Invoke();
         }
-
-        UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
     }
 
     /// <summary>現在ページとページ寸法を設定する (ページ移動時)。</summary>
@@ -120,6 +124,27 @@ public sealed class InkSession
         _hasPageGeometry = false;
         UndoRedoChanged?.Invoke(false, false);
     }
+
+    /// <summary>読み込んだノートで置き換える (起動時復元)。UI スレッドから呼ぶ。</summary>
+    public void LoadDocument(InkDocument document)
+    {
+        EndActiveStroke(commit: false);
+        _document.Clear();
+
+        foreach (var page in document.Pages)
+        {
+            var target = _document.GetOrCreatePage(page.PageIndex);
+            target.Strokes.AddRange(page.Strokes);
+        }
+
+        _undo.Clear();
+        _renderer.MarkAllDirty();
+        _canvas.Invalidate();
+        UndoRedoChanged?.Invoke(false, false);
+    }
+
+    /// <summary>現在の手書き内容のスナップショットを DTO として取得する (保存用、UI スレッド)。</summary>
+    public NoteDocumentDto CaptureSnapshot() => NoteSerializer.ToDocument(_document);
 
     private void OnActionRequested(InputAction action)
     {
@@ -311,6 +336,7 @@ public sealed class InkSession
                 _renderer.MarkPageDirty(_currentPage);
                 _canvas.Invalidate();
                 UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
+                ContentChanged?.Invoke();
                 return;
             }
         }
@@ -333,6 +359,7 @@ public sealed class InkSession
             _undo.Push(new AddStrokeOperation(stroke));
             _renderer.BakeStroke(stroke);
             UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
+            ContentChanged?.Invoke();
         }
 
         _canvas.Invalidate();

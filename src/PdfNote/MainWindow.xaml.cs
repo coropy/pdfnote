@@ -9,6 +9,7 @@ using PdfNote.Core;
 using PdfNote.Diagnostics;
 using PdfNote.Ink;
 using PdfNote.Session;
+using PdfNote.Storage;
 using PdfNote.View;
 using Windows.System;
 
@@ -20,6 +21,7 @@ public sealed partial class MainWindow : Window
     private readonly PdfCanvas _canvas;
     private readonly PerfMonitor _perf = new();
     private readonly InkSession _ink;
+    private readonly NoteAutoSave _autoSave;
     private readonly Stopwatch _stopwatch = new();
     private bool _dialogOpen;
     private bool _renderErrorShown;
@@ -33,6 +35,10 @@ public sealed partial class MainWindow : Window
         ContentHost.Children.Insert(0, _canvas);
 
         _ink = new InkSession(_canvas, _perf);
+        _autoSave = new NoteAutoSave(_ink, DispatcherQueue);
+        _ink.ContentChanged += () => _autoSave.OnContentChanged();
+        _autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(
+            () => SaveStatusText.Text = status);
         _ink.ToolChanged += SyncToolButtons;
         _ink.UndoRedoChanged += (_, _) => DispatcherQueue.TryEnqueue(UpdateToolbar);
         _ink.PageActionRequested += next => DispatcherQueue.TryEnqueue(() =>
@@ -68,8 +74,11 @@ public sealed partial class MainWindow : Window
         _perf.SetExtraProvider(() =>
         {
             var cache = _session.CacheStats;
+            var noteInfo = _autoSave.LastNoteBytes >= 0
+                ? $"\nNote {_autoSave.LastNoteBytes / 1024.0:F0} KB (save {_autoSave.LastSaveMs:F0} ms)"
+                : string.Empty;
             return $"Zoom {ZoomPercent:F0}%  Page {_session.CurrentPage + 1}/{_session.PageCount}\n" +
-                   $"Cache {cache.Count} pages / {cache.Bytes / (1024.0 * 1024.0):F0} MB";
+                   $"Cache {cache.Count} pages / {cache.Bytes / (1024.0 * 1024.0):F0} MB" + noteInfo;
         });
         _perf.Start(DispatcherQueue, text => PerfText.Text = text);
 
@@ -78,6 +87,16 @@ public sealed partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
+            // 未保存データを確実に保存してから終了する (同期、例外は握りつぶしてログ)。
+            try
+            {
+                _autoSave.SaveNowSync();
+            }
+            catch (Exception closeEx)
+            {
+                App.LogError("終了時保存に失敗しました。", closeEx);
+            }
+
             CompositionTarget.Rendering -= OnRenderingTick;
             _session.Dispose();
         };
@@ -215,14 +234,26 @@ public sealed partial class MainWindow : Window
             // ページ寸法の一括取得を含むため UI スレッド外で開く。
             await Task.Run(() => _session.Open(file.Path));
 
+            // ノート (<PDF名>.note) をバックグラウンドで読み込む。
+            var outcome = await Task.Run(() => _autoSave.PrepareForOpen(file.Path, _session.PageCount));
+
             var (widthPt, heightPt) = _session.GetPageSizePt(_session.CurrentPage);
             _canvas.SetPageGeometry(widthPt, heightPt);
-            _ink.ResetDocument();
-            _ink.SetPage(_session.CurrentPage, widthPt, heightPt);
             _renderErrorShown = false;
+            _ink.ResetDocument();
+            if (outcome.Document.Pages.Count > 0)
+            {
+                _ink.LoadDocument(outcome.Document);
+            }
+            _ink.SetPage(_session.CurrentPage, widthPt, heightPt);
             _canvas.FitToViewport();
             // 初回レンダリングを保証 (同じ値でも強制評価)。
             _session.SetDesiredScale(_canvas.DisplayPxPerPt, force: true);
+
+            if (outcome.Warning is not null)
+            {
+                await ShowErrorAsync("ノートの読み込み", outcome.Warning);
+            }
         }
         catch (PdfOpenException ex)
         {

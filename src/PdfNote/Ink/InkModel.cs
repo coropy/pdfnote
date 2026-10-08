@@ -97,6 +97,9 @@ public sealed class InkDocument
 {
     private readonly Dictionary<int, InkPage> _pages = new();
 
+    /// <summary>すべてのページ (保存/スナップショット用)。</summary>
+    public IReadOnlyCollection<InkPage> Pages => _pages.Values;
+
     public InkPage GetOrCreatePage(int pageIndex)
     {
         if (!_pages.TryGetValue(pageIndex, out var page))
