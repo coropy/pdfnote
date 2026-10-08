@@ -181,33 +181,12 @@ public sealed class InkRenderer
 
 
     /// <summary>
-    /// ストロークをセグメント単位で描画する (pt 空間)。
-    /// 筆圧→線幅は単純マッピング (将来カーブ設定可能にする)。
+    /// ストロークを滑らかな可変幅リボン (丸キャップ + Catmull-Rom 平滑化) で描画する (pt 空間)。
+    /// 詳細は InkRibbon を参照。
     /// </summary>
     private static void DrawStrokeSegments(CanvasDrawingSession session, Stroke stroke)
     {
-        var points = stroke.Points;
-        var count = points.Count;
-        if (count == 0)
-        {
-            return;
-        }
-
-        var color = Color.FromArgb(stroke.A, stroke.R, stroke.G, stroke.B);
-        if (count == 1)
-        {
-            session.FillCircle(points[0].Position, Math.Max(0.5f, stroke.WidthPt * 0.5f), color);
-            return;
-        }
-
-        var previous = points[0];
-        for (var i = 1; i < count; i++)
-        {
-            var current = points[i];
-            var width = Math.Max(0.35f, stroke.WidthPt * PressureToWidthFactor(current.Pressure));
-            session.DrawLine(previous.Position, current.Position, color, width);
-            previous = current;
-        }
+        InkRibbon.Draw(session, stroke);
     }
 
     /// <summary>筆圧 (0..1) → 線幅係数。0.4倍〜1.2倍。</summary>
