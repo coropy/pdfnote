@@ -186,8 +186,9 @@ public sealed class PdfCanvas : UserControl
     public void SetFrame(RenderedFrame frame)
     {
         _currentFrame = frame;
+        // 共有デバイスを使う (CanvasControl の準備状態に依存しない。UseSharedDevice 既定=true で互換)。
         var bitmap = CanvasBitmap.CreateFromBytes(
-            _canvas,
+            CanvasDevice.GetSharedDevice(),
             frame.Pixels,
             frame.PixelWidth,
             frame.PixelHeight,
@@ -363,7 +364,7 @@ public sealed class PdfCanvas : UserControl
         {
             _bitmap?.Dispose();
             _bitmap = CanvasBitmap.CreateFromBytes(
-                sender,
+                CanvasDevice.GetSharedDevice(),
                 frame.Pixels,
                 frame.PixelWidth,
                 frame.PixelHeight,

@@ -22,6 +22,7 @@ public sealed partial class MainWindow : Window
     private readonly InkSession _ink;
     private readonly Stopwatch _stopwatch = new();
     private bool _dialogOpen;
+    private bool _renderErrorShown;
 
     public MainWindow()
     {
@@ -51,8 +52,17 @@ public sealed partial class MainWindow : Window
 
         _session.FrameReady += OnFrameReady;
         _session.CurrentPageChanged += OnCurrentPageChanged;
-        _session.RenderFailed += ex => DispatcherQueue.TryEnqueue(
-            () => _ = ShowErrorAsync("レンダリングエラー", Describe(ex)));
+        _session.RenderFailed += ex => DispatcherQueue.TryEnqueue(() =>
+        {
+            App.LogError("レンダリングエラー", ex);
+            if (_renderErrorShown)
+            {
+                return;
+            }
+
+            _renderErrorShown = true;
+            _ = ShowErrorAsync("レンダリングエラー", Describe(ex));
+        });
 
         CompositionTarget.Rendering += OnRenderingTick;
         _perf.SetExtraProvider(() =>
@@ -82,11 +92,20 @@ public sealed partial class MainWindow : Window
         _perf.RecordRender(frame.RenderMs);
         DispatcherQueue.TryEnqueue(() =>
         {
-            _stopwatch.Restart();
-            _canvas.SetFrame(frame);
-            _stopwatch.Stop();
-            _perf.RecordUpload(_stopwatch.Elapsed.TotalMilliseconds);
-            UpdateToolbar();
+            try
+            {
+                _stopwatch.Restart();
+                _canvas.SetFrame(frame);
+                _stopwatch.Stop();
+                _perf.RecordUpload(_stopwatch.Elapsed.TotalMilliseconds);
+                UpdateToolbar();
+            }
+            catch (Exception ex)
+            {
+                // GPU アップロード失敗時もアプリを継続させる。
+                App.LogError("SetFrame に失敗しました。", ex);
+                _ = ShowErrorAsync("ページの表示に失敗しました", Describe(ex));
+            }
         });
     }
 
@@ -101,10 +120,18 @@ public sealed partial class MainWindow : Window
 
     private void OnCurrentPageChanged(int page) => DispatcherQueue.TryEnqueue(() =>
     {
-        if (_session.HasDocument)
+        try
         {
-            var (widthPt, heightPt) = _session.GetPageSizePt(page);
-            _ink.SetPage(page, widthPt, heightPt);
+            if (_session.HasDocument)
+            {
+                var (widthPt, heightPt) = _session.GetPageSizePt(page);
+                _ink.SetPage(page, widthPt, heightPt);
+            }
+        }
+        catch (Exception ex)
+        {
+            // ページ寸法の取得に失敗してもアプリは継続 (レンダリング時にエラー表示)。
+            App.LogError($"ページ {page + 1} の寸法取得に失敗しました。", ex);
         }
         UpdateToolbar();
     });
@@ -192,6 +219,7 @@ public sealed partial class MainWindow : Window
             _canvas.SetPageGeometry(widthPt, heightPt);
             _ink.ResetDocument();
             _ink.SetPage(_session.CurrentPage, widthPt, heightPt);
+            _renderErrorShown = false;
             _canvas.FitToViewport();
             // 初回レンダリングを保証 (同じ値でも強制評価)。
             _session.SetDesiredScale(_canvas.DisplayPxPerPt, force: true);

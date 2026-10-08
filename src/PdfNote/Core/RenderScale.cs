@@ -20,4 +20,7 @@ public static class RenderScale
 
     /// <summary>1回のレンダリングで許容する最大ピクセル数 (約4096x4096)。</summary>
     public const long MaxRenderPixels = 16_000_000;
+
+    /// <summary>1辺あたりの最大ピクセル数 (Direct2D テクスチャ上限の安全側)。</summary>
+    public const int MaxRenderDimensionPx = 8192;
 }

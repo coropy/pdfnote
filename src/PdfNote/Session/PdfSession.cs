@@ -259,7 +259,10 @@ public sealed class PdfSession : IDisposable
             return pxPerPt;
         }
 
-        var max = Math.Sqrt(RenderScale.MaxRenderPixels / (widthPt * heightPt));
+        // 総ピクセル数と 1 辺の両方で上限を設ける (異常に細長いページ対策)。
+        var maxByPixels = Math.Sqrt(RenderScale.MaxRenderPixels / (widthPt * heightPt));
+        var maxByDimension = RenderScale.MaxRenderDimensionPx / Math.Max(widthPt, heightPt);
+        var max = Math.Min(maxByPixels, maxByDimension);
         var scale = Math.Min(pxPerPt, max);
         return Math.Max(scale, Math.Min(RenderScale.MinPxPerPt, max));
     }
