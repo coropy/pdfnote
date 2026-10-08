@@ -96,7 +96,10 @@ public sealed class InkRenderer
             var entry = EnsureTexture(pageIndex, page);
             if (entry?.Texture is { } texture)
             {
-                session.Transform = baseTransform * Matrix3x2.CreateScale((float)(1.0 / entry.PxPerPt));
+                // 行列は行ベクトル規約 (A * B は A を先に適用)。
+                // テクスチャpx → pt への変換を先にかけ、その後ページ空間 (表示スケール+パン) へ。
+                // (baseTransform を先にかけるとパン速度が 1/pxPerPt 倍になり視差が発生する)
+                session.Transform = Matrix3x2.CreateScale((float)(1.0 / entry.PxPerPt)) * baseTransform;
                 session.DrawImage(texture);
                 session.Transform = baseTransform;
             }
