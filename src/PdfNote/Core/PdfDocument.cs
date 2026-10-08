@@ -150,6 +150,34 @@ public sealed class PdfDocument : IDisposable
                 $"ページ {pageIndex + 1} の描画バッファが不正です (期待 {width * height * 4} / 実際 {pixels.LongLength})。");
         }
 
+        // PDFium の出力は straight アルファ & 背景透過。
+        // CanvasBitmap.CreateFromBytes は Ignore/Premultiplied のみ対応のため、
+        // ここ (ワーカースレッド) で白背景に事前合成して不透明バッファにする。
+        // out = src * a + 255 * (1 - a)  (a は 0..255 正規化前、シフトで近似)
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            var alpha = pixels[i + 3];
+            if (alpha == 255)
+            {
+                continue;
+            }
+
+            if (alpha == 0)
+            {
+                pixels[i] = 255;
+                pixels[i + 1] = 255;
+                pixels[i + 2] = 255;
+                pixels[i + 3] = 255;
+                continue;
+            }
+
+            var inverse = 255 - alpha;
+            pixels[i] = (byte)Math.Min(255, (pixels[i] * alpha >> 8) + inverse);
+            pixels[i + 1] = (byte)Math.Min(255, (pixels[i + 1] * alpha >> 8) + inverse);
+            pixels[i + 2] = (byte)Math.Min(255, (pixels[i + 2] * alpha >> 8) + inverse);
+            pixels[i + 3] = 255;
+        }
+
         // 寸法キャッシュが未取得ならレンダ結果から逆算して埋める。
         lock (_dimsGate)
         {

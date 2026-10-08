@@ -186,7 +186,8 @@ public sealed class PdfCanvas : UserControl
     public void SetFrame(RenderedFrame frame)
     {
         _currentFrame = frame;
-        // 共有デバイスを使う (CanvasControl の準備状態に依存しない。UseSharedDevice 既定=true で互換)。
+        // 共有デバイス (CanvasControl の準備状態に依存しない。UseSharedDevice 既定=true で互換)。
+        // Pixels は PdfDocument 側で白合成済みの不透明 BGRA なので Ignore で扱う。
         var bitmap = CanvasBitmap.CreateFromBytes(
             CanvasDevice.GetSharedDevice(),
             frame.Pixels,
@@ -194,7 +195,7 @@ public sealed class PdfCanvas : UserControl
             frame.PixelHeight,
             DirectXPixelFormat.B8G8R8A8UIntNormalized,
             96f,
-            CanvasAlphaMode.Straight);
+            CanvasAlphaMode.Ignore);
 
         _bitmap?.Dispose();
         _bitmap = bitmap;
@@ -370,7 +371,7 @@ public sealed class PdfCanvas : UserControl
                 frame.PixelHeight,
                 DirectXPixelFormat.B8G8R8A8UIntNormalized,
                 96f,
-                CanvasAlphaMode.Straight);
+                CanvasAlphaMode.Ignore);
             _bitmapPxPerPt = frame.PxPerPt;
         }
     }
