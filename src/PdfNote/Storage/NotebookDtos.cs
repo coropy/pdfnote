@@ -1,0 +1,72 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
+using PdfNote.Core;
+
+namespace PdfNote.Storage;
+
+// ============================================================
+// ノートブック保存形式 (JSON v2) の DTO (段階2 最小版)。
+// pages + strokes のみを扱い、resources / objects は段階5で追加する。
+// 大きな PDF / 画像データは一切埋め込まない (段階2では PDF 非対象)。
+// 内部モデル (Notebook / InkPage) と完全に分離された境界。
+// ============================================================
+
+public sealed class NotebookFileDto
+{
+    /// <summary>フォーマットバージョン (= 2)。欠損は null → 不明バージョンとして拒否。</summary>
+    [JsonPropertyName("formatVersion")]
+    public int? FormatVersion { get; set; }
+
+    [JsonPropertyName("notebook")]
+    public NotebookInfoDto? Notebook { get; set; }
+
+    [JsonPropertyName("pages")]
+    public List<NotebookPageFileDto>? Pages { get; set; }
+}
+
+public sealed class NotebookInfoDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>UTC (ISO 8601)。</summary>
+    [JsonPropertyName("createdUtc")]
+    public string CreatedUtc { get; set; } = string.Empty;
+
+    [JsonPropertyName("updatedUtc")]
+    public string UpdatedUtc { get; set; } = string.Empty;
+}
+
+public sealed class NotebookPageFileDto
+{
+    [JsonPropertyName("pageIndex")]
+    public int PageIndex { get; set; }
+
+    [JsonPropertyName("widthPt")]
+    public double WidthPt { get; set; }
+
+    [JsonPropertyName("heightPt")]
+    public double HeightPt { get; set; }
+
+    [JsonPropertyName("background")]
+    public NotebookBackgroundDto? Background { get; set; }
+
+    /// <summary>ストローク (v1 と同じ NoteStrokeDto 構造を再利用)。</summary>
+    [JsonPropertyName("strokes")]
+    public List<NoteStrokeDto>? Strokes { get; set; }
+}
+
+public sealed class NotebookBackgroundDto
+{
+    /// <summary>"Plain" / "Grid"。</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = nameof(PageBackgroundKind.Plain);
+
+    /// <summary>方眼間隔 (pt)。Plain では未使用。</summary>
+    [JsonPropertyName("gridSpacingPt")]
+    public double GridSpacingPt { get; set; } = NotebookDefaults.GridSpacingPt;
+}

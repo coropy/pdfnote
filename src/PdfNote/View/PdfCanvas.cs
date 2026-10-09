@@ -27,6 +27,7 @@ namespace PdfNote.View;
 public sealed class PdfCanvas : UserControl
 {
     private static readonly Color BorderColor = Color.FromArgb(255, 96, 96, 96);
+    private static readonly Color GridLineColor = Color.FromArgb(255, 208, 208, 208);
     private static readonly Color PlaceholderColor = Color.FromArgb(255, 170, 170, 170);
 
     /// <summary>ページがビュー外に出すぎないように残す余白 (DIP)。</summary>
@@ -43,6 +44,8 @@ public sealed class PdfCanvas : UserControl
     private Vector2 _panOffset; // ページ左上の表示位置 (コントロール座標 DIP)
     private double _pageWidthPt;
     private double _pageHeightPt;
+    private PageBackgroundKind _backgroundKind = PageBackgroundKind.Plain;
+    private float _gridSpacingPt = NotebookDefaults.GridSpacingPt;
     private string _placeholder = "Ctrl+O で PDF を開いてください";
     private bool _pendingFit = true;
 
@@ -118,6 +121,23 @@ public sealed class PdfCanvas : UserControl
         _pageWidthPt = widthPt;
         _pageHeightPt = heightPt;
         _pendingFit = true;
+    }
+
+    /// <summary>ページ背景を設定する (ノートブックモード。ページ切替ごとに呼ぶ)。</summary>
+    public void SetPageBackground(PageBackgroundKind kind, float gridSpacingPt)
+    {
+        _backgroundKind = kind;
+        _gridSpacingPt = Math.Max(gridSpacingPt, 1f);
+        _canvas.Invalidate();
+    }
+
+    /// <summary>表示中の PDF フレームを破棄する (PDF → ノートブックへの切替時)。</summary>
+    public void ClearFrame()
+    {
+        _bitmap?.Dispose();
+        _bitmap = null;
+        _currentFrame = null;
+        _canvas.Invalidate();
     }
 
     /// <summary>ビューにフィットするズーム + 位置にリセットする。</summary>
@@ -330,31 +350,69 @@ public sealed class PdfCanvas : UserControl
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
         var session = args.DrawingSession;
+        var hasPage = _pageWidthPt > 0 && _pageHeightPt > 0;
 
-        if (_bitmap is null)
+        if (_bitmap is null && !hasPage)
         {
             DrawPlaceholder(sender, session);
             return;
         }
 
-        var scale = (float)(_displayPxPerPt / _bitmapPxPerPt);
-        session.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(_panOffset);
+        // ページ空間 (表示スケール + パン) の変換。背景と Ink で共有する。
+        var pageTransform = Matrix3x2.CreateScale((float)_displayPxPerPt) * Matrix3x2.CreateTranslation(_panOffset);
 
-        // PDFium の出力は背景が透明なため、白背景の上に Straight アルファで合成する。
-        var size = _bitmap.Size;
-        session.FillRectangle(0f, 0f, (float)size.Width, (float)size.Height, Colors.White);
-        session.DrawImage(_bitmap);
+        if (_bitmap is not null)
+        {
+            var scale = (float)(_displayPxPerPt / _bitmapPxPerPt);
+            session.Transform = Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(_panOffset);
 
-        // ページ外枠 (ズームで線幅が変わらないように逆スケール)。
-        session.DrawRectangle(0f, 0f, (float)size.Width, (float)size.Height, BorderColor, 1f / Math.Max(scale, 0.0001f));
+            // PDFium の出力は背景が透明なため、白背景の上に Straight アルファで合成する。
+            var size = _bitmap.Size;
+            session.FillRectangle(0f, 0f, (float)size.Width, (float)size.Height, Colors.White);
+            session.DrawImage(_bitmap);
 
-        // Ink Layer (PDF テクスチャと独立の合成パス)。
-        if (InkDrawing is not null && _pageWidthPt > 0)
+            // ページ外枠 (ズームで線幅が変わらないように逆スケール)。
+            session.DrawRectangle(0f, 0f, (float)size.Width, (float)size.Height, BorderColor, 1f / Math.Max(scale, 0.0001f));
+        }
+        else if (hasPage)
+        {
+            // PDF テクスチャのないページ (ノートブックモードの白紙/方眼)。
+            session.Transform = pageTransform;
+            var width = (float)_pageWidthPt;
+            var height = (float)_pageHeightPt;
+            session.FillRectangle(0f, 0f, width, height, Colors.White);
+            if (_backgroundKind == PageBackgroundKind.Grid)
+            {
+                DrawGrid(session, width, height);
+            }
+
+            session.DrawRectangle(0f, 0f, width, height, BorderColor, 1f / Math.Max((float)_displayPxPerPt, 0.0001f));
+        }
+
+        // Ink Layer (背景/PDF テクスチャより前面の合成パス)。
+        if (InkDrawing is not null && hasPage)
         {
             var previousTransform = session.Transform;
-            session.Transform = Matrix3x2.CreateScale((float)_displayPxPerPt) * Matrix3x2.CreateTranslation(_panOffset);
+            session.Transform = pageTransform;
             InkDrawing.Invoke(session);
             session.Transform = previousTransform;
+        }
+    }
+
+    /// <summary>方眼背景をページ座標 (pt) に沿って描画する。線は画面上 1px (逆スケール)。</summary>
+    private void DrawGrid(CanvasDrawingSession session, float widthPt, float heightPt)
+    {
+        var spacing = Math.Max(_gridSpacingPt, 1f);
+        var strokeWidth = 1f / Math.Max((float)_displayPxPerPt, 0.0001f);
+
+        for (var x = spacing; x < widthPt - 0.01f; x += spacing)
+        {
+            session.DrawLine(new Vector2(x, 0f), new Vector2(x, heightPt), GridLineColor, strokeWidth);
+        }
+
+        for (var y = spacing; y < heightPt - 0.01f; y += spacing)
+        {
+            session.DrawLine(new Vector2(0f, y), new Vector2(widthPt, y), GridLineColor, strokeWidth);
         }
     }
 

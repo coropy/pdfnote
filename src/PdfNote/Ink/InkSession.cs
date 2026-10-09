@@ -111,14 +111,47 @@ public sealed class InkSession
     }
 
     /// <summary>現在ページとページ寸法を設定する (ページ移動時)。</summary>
+    /// <remarks>
+    /// 入力中のストロークは黙って破棄しない (コミットしてから切替える)。
+    /// <see cref="KeepPageTextures"/> が true の場合 (ノートブックモード) はページ切替で
+    /// Ink Texture を破棄しない (ページ数は有限)。既定 false は従来の PDF モード動作。
+    /// </remarks>
     public void SetPage(int pageIndex, double widthPt, double heightPt)
     {
-        EndActiveStroke(commit: false);
-        _renderer.RemovePage(_currentPage);
+        EndActiveStroke(commit: _activeStroke is not null);
+        if (!KeepPageTextures)
+        {
+            _renderer.RemovePage(_currentPage);
+        }
+
         _currentPage = pageIndex;
         _renderer.SetPageGeometry(pageIndex, widthPt, heightPt);
         _renderer.SetDisplayScale(_canvas.DisplayPxPerPt);
         _hasPageGeometry = widthPt > 0;
+    }
+
+    /// <summary>true のときページ切替で Ink Texture を破棄しない (ノートブックモード用)。</summary>
+    public bool KeepPageTextures { get; set; }
+
+    /// <summary>
+    /// ノートブックのページ (InkPage) をこのセッションに共有登録する。
+    /// 渡された InkPage インスタンスは NotebookPage 側と同一のため、状態の二重化は発生しない。
+    /// UI スレッドから呼ぶ。
+    /// </summary>
+    public void AttachPages(IReadOnlyList<InkPage> pages)
+    {
+        EndActiveStroke(commit: _activeStroke is not null);
+        _document.Clear();
+        foreach (var page in pages)
+        {
+            _document.AttachPage(page.PageIndex, page);
+        }
+
+        _undo.Clear();
+        _renderer.Clear();
+        _renderer.SetDisplayScale(_canvas.DisplayPxPerPt);
+        UndoRedoChanged?.Invoke(false, false);
+        _canvas.Invalidate();
     }
 
     /// <summary>ドキュメントを閉じた/開いた時に全 Ink を破棄する。</summary>

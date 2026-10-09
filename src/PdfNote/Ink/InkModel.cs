@@ -111,6 +111,12 @@ public sealed class InkDocument
         return page;
     }
 
+    /// <summary>
+    /// 既存の InkPage インスタンスを外部から登録する。
+    /// NotebookPage.Ink と同一インスタンスを共有するための追加 API (既存動作は不変)。
+    /// </summary>
+    public void AttachPage(int pageIndex, InkPage page) => _pages[pageIndex] = page;
+
     public bool HasStrokes(int pageIndex) =>
         _pages.TryGetValue(pageIndex, out var page) && page.StrokeCount > 0;
 

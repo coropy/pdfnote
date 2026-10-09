@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -25,12 +26,17 @@ public sealed partial class MainWindow : Window
     private readonly PerfMonitor _perf = new();
     private readonly InkSession _ink;
     private readonly NoteAutoSave _autoSave;
+    private NotebookSession? _notebook;
+    private NotebookAutoSave? _notebookAutoSave;
     private readonly Stopwatch _stopwatch = new();
     private AppSettings _settings = new();
     private readonly List<KeyboardAccelerator> _customAccelerators = new();
     private readonly HashSet<(int Key, int Modifiers)> _reservedKeys = new();
     private bool _dialogOpen;
     private bool _renderErrorShown;
+
+    /// <summary>ノートブックモード (白紙ノート) 中か。null でなければノートブックモード。</summary>
+    private bool IsNotebookMode => _notebook is not null;
 
     public MainWindow()
     {
@@ -54,20 +60,36 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(() => _ = ShowSettingsWarningAsync(warning));
         }
         _autoSave = new NoteAutoSave(_ink, DispatcherQueue);
-        _ink.ContentChanged += () => _autoSave.OnContentChanged();
-        _autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(
-            () => SaveStatusText.Text = status);
+        // 手書きの変更はモードに応じて PDF の .note / ノートブックのいずれかに振り分ける。
+        _ink.ContentChanged += () =>
+        {
+            if (IsNotebookMode)
+            {
+                _notebookAutoSave?.OnContentChanged();
+            }
+            else
+            {
+                _autoSave.OnContentChanged();
+            }
+        };
+        _autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!IsNotebookMode)
+            {
+                SaveStatusText.Text = status;
+            }
+        });
         _ink.ToolChanged += SyncToolButtons;
         _ink.UndoRedoChanged += (_, _) => DispatcherQueue.TryEnqueue(UpdateToolbar);
         _ink.PageActionRequested += next => DispatcherQueue.TryEnqueue(() =>
         {
             if (next)
             {
-                _session.NextPage();
+                GoToNextPage();
             }
             else
             {
-                _session.PreviousPage();
+                GoToPreviousPage();
             }
         });
 
@@ -95,7 +117,7 @@ public sealed partial class MainWindow : Window
             var noteInfo = _autoSave.LastNoteBytes >= 0
                 ? $"\nNote {_autoSave.LastNoteBytes / 1024.0:F0} KB (save {_autoSave.LastSaveMs:F0} ms)"
                 : string.Empty;
-            return $"Zoom {ZoomPercent:F0}%  Page {_session.CurrentPage + 1}/{_session.PageCount}\n" +
+            return $"Zoom {ZoomPercent:F0}%  Page {PageDisplayText()}\n" +
                    $"Cache {cache.Count} pages / {cache.Bytes / (1024.0 * 1024.0):F0} MB" + noteInfo;
         });
         _perf.Start(DispatcherQueue, text => PerfText.Text = text);
@@ -109,6 +131,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 _autoSave.SaveNowSync();
+                _notebookAutoSave?.SaveNowSync();
             }
             catch (Exception closeEx)
             {
@@ -175,9 +198,9 @@ public sealed partial class MainWindow : Window
 
     private void OnOpenClick(object sender, RoutedEventArgs e) => _ = OpenPdfAsync();
 
-    private void OnPrevPageClick(object sender, RoutedEventArgs e) => _session.PreviousPage();
+    private void OnPrevPageClick(object sender, RoutedEventArgs e) => GoToPreviousPage();
 
-    private void OnNextPageClick(object sender, RoutedEventArgs e) => _session.NextPage();
+    private void OnNextPageClick(object sender, RoutedEventArgs e) => GoToNextPage();
 
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomIn();
 
@@ -220,18 +243,85 @@ public sealed partial class MainWindow : Window
 
     private void UpdateToolbar()
     {
-        PageText.Text = _session.HasDocument
-            ? $"{_session.CurrentPage + 1} / {_session.PageCount}"
-            : "-";
+        var hasPages = IsNotebookMode || _session.HasDocument;
+        PageText.Text = hasPages ? PageDisplayText() : "-";
         ZoomText.Text = $"{ZoomPercent:F0}%";
-        PrevButton.IsEnabled = _session.HasDocument && _session.CurrentPage > 0;
-        NextButton.IsEnabled = _session.HasDocument && _session.CurrentPage < _session.PageCount - 1;
+        var current = IsNotebookMode ? _notebook!.CurrentPage : _session.CurrentPage;
+        var count = IsNotebookMode ? _notebook!.PageCount : _session.PageCount;
+        PrevButton.IsEnabled = hasPages && current > 0;
+        NextButton.IsEnabled = hasPages && count > 0 && current < count - 1;
         UndoButton.IsEnabled = _ink.CanUndo;
         RedoButton.IsEnabled = _ink.CanRedo;
-        PenToolButton.IsEnabled = _session.HasDocument;
-        EraserToolButton.IsEnabled = _session.HasDocument;
+        PenToolButton.IsEnabled = hasPages;
+        EraserToolButton.IsEnabled = hasPages;
+        BackgroundToggleButton.IsEnabled = IsNotebookMode;
         PenToolButton.IsChecked = _ink.CurrentTool == InkTool.Pen;
         EraserToolButton.IsChecked = _ink.CurrentTool == InkTool.Eraser;
+        if (IsNotebookMode)
+        {
+            BackgroundToggleButton.IsChecked = _notebook!.CurrentPageView.Background == PageBackgroundKind.Grid;
+        }
+    }
+
+    private string PageDisplayText()
+    {
+        if (IsNotebookMode)
+        {
+            return _notebook!.PageCount > 0 ? $"{_notebook.CurrentPage + 1} / {_notebook.PageCount}" : "-";
+        }
+
+        return _session.HasDocument ? $"{_session.CurrentPage + 1} / {_session.PageCount}" : "-";
+    }
+
+    // ------------------------------------------------------------
+    // ページ移動 (モード別に振り分ける)。
+    // ------------------------------------------------------------
+    private void GoToNextPage()
+    {
+        if (IsNotebookMode)
+        {
+            _notebook!.NextPage();
+        }
+        else
+        {
+            _session.NextPage();
+        }
+    }
+
+    private void GoToPreviousPage()
+    {
+        if (IsNotebookMode)
+        {
+            _notebook!.PreviousPage();
+        }
+        else
+        {
+            _session.PreviousPage();
+        }
+    }
+
+    private void GoToFirstPage()
+    {
+        if (IsNotebookMode)
+        {
+            _notebook!.FirstPage();
+        }
+        else
+        {
+            _session.FirstPage();
+        }
+    }
+
+    private void GoToLastPage()
+    {
+        if (IsNotebookMode)
+        {
+            _notebook!.LastPage();
+        }
+        else
+        {
+            _session.LastPage();
+        }
     }
 
     private async Task OpenPdfAsync()
@@ -246,6 +336,9 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
+
+        // PDF を開く前にノートブックモードを終了する (未保存データは確定保存)。
+        DetachNotebook();
 
         try
         {
@@ -308,6 +401,136 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // ------------------------------------------------------------
+    // ノートブック (白紙ノート) モード。段階2 最小実装:
+    // 作成はツールバー「白紙ノート」のみ。保存は自動保存 (v2 最小形式) のみで、
+    // 開き直し UI は段階4 (ホーム画面) で対応する。
+    // ------------------------------------------------------------
+    private void OnNewBlankNotebookClick(object sender, RoutedEventArgs e)
+    {
+        var session = NotebookSession.CreateNew(
+            NotebookDefaults.A4WidthPt,
+            NotebookDefaults.A4HeightPt,
+            PageBackgroundKind.Plain);
+        ActivateNotebook(session);
+    }
+
+    private void OnToggleBackgroundClick(object sender, RoutedEventArgs e)
+    {
+        if (!IsNotebookMode)
+        {
+            // ノートブックモード外では操作せず表示だけ同期する。
+            BackgroundToggleButton.IsChecked = false;
+            return;
+        }
+
+        var kind = BackgroundToggleButton.IsChecked == true
+            ? PageBackgroundKind.Grid
+            : PageBackgroundKind.Plain;
+        _notebook!.SetCurrentPageBackground(kind);
+        var page = _notebook.CurrentPageView;
+        _canvas.SetPageBackground(page.Background, page.GridSpacingPt);
+        _canvas.Invalidate();
+    }
+
+    /// <summary>ノートブックモードへ切り替える (呼び出しは UI スレッド)。</summary>
+    private void ActivateNotebook(NotebookSession session)
+    {
+        // 直前のコンテキストを確定保存してから切替える。
+        if (IsNotebookMode)
+        {
+            _notebookAutoSave?.SaveNowSync();
+        }
+        else if (_autoSave.IsDirty)
+        {
+            _autoSave.SaveNowSync();
+        }
+
+        DetachNotebookCore(save: false);
+
+        _notebook = session;
+        _ink.KeepPageTextures = true;
+        _ink.AttachPages(session.GetInkPages());
+
+        // PDF の再レンダリングを停止し、表示をノートブックに置き換える。
+        _session.Close();
+        _canvas.ClearFrame();
+
+        // 自動保存先: %LOCALAPPDATA%\PdfNote\Notebooks\blank-notebook.nb.json (単一スロット)。
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PdfNote",
+            "Notebooks");
+        Directory.CreateDirectory(directory);
+        var savePath = Path.Combine(directory, "blank-notebook.nb.json");
+
+        var autoSave = new NotebookAutoSave(session, DispatcherQueue) { SavePath = savePath };
+        autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (IsNotebookMode && ReferenceEquals(_notebookAutoSave, autoSave))
+            {
+                SaveStatusText.Text = status;
+            }
+        });
+        session.CurrentPageChanged += page => DispatcherQueue.TryEnqueue(() =>
+        {
+            if (IsNotebookMode && ReferenceEquals(_notebook, session))
+            {
+                OnNotebookPageChanged(page);
+            }
+        });
+        session.ContentChanged += () => autoSave.OnContentChanged();
+        _notebookAutoSave = autoSave;
+
+        // 先頭ページを表示 (SetPage(0) が CurrentPageChanged を発火する)。
+        session.SetPage(0);
+        OnNotebookPageChanged(session.CurrentPage);
+        _canvas.FitToViewport();
+        UpdateToolbar();
+    }
+
+    /// <summary>ノートブックモードから抜ける (PDF を開く前など)。未保存データは確定保存する。</summary>
+    private void DetachNotebook()
+    {
+        DetachNotebookCore(save: true);
+    }
+
+    private void DetachNotebookCore(bool save)
+    {
+        if (_notebook is null)
+        {
+            return;
+        }
+
+        if (save)
+        {
+            _notebookAutoSave?.SaveNowSync();
+        }
+
+        _notebookAutoSave?.Dispose();
+        _notebookAutoSave = null;
+        _notebook = null;
+        _ink.KeepPageTextures = false;
+        _canvas.SetPageBackground(PageBackgroundKind.Plain, NotebookDefaults.GridSpacingPt);
+        _canvas.ClearFrame();
+        UpdateToolbar();
+    }
+
+    /// <summary>ノートブックのページ切替後処理 (UI スレッド)。</summary>
+    private void OnNotebookPageChanged(int page)
+    {
+        if (_notebook is null)
+        {
+            return;
+        }
+
+        var notebookPage = _notebook.CurrentPageView;
+        _canvas.SetPageBackground(notebookPage.Background, notebookPage.GridSpacingPt);
+        _canvas.SetPageGeometry(notebookPage.WidthPt, notebookPage.HeightPt);
+        _ink.SetPage(page, notebookPage.WidthPt, notebookPage.HeightPt);
+        UpdateToolbar();
+    }
+
     private static string Describe(Exception ex) => $"{ex.Message}\n({ex.GetType().Name})";
 
     private void RegisterShortcuts()
@@ -315,10 +538,10 @@ public sealed partial class MainWindow : Window
         Add(VirtualKey.O, VirtualKeyModifiers.Control, () => _ = OpenPdfAsync());
         Add(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ink.Undo());
         Add(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ink.Redo());
-        Add(VirtualKey.PageUp, VirtualKeyModifiers.None, () => _session.PreviousPage());
-        Add(VirtualKey.PageDown, VirtualKeyModifiers.None, () => _session.NextPage());
-        Add(VirtualKey.Home, VirtualKeyModifiers.None, () => _session.FirstPage());
-        Add(VirtualKey.End, VirtualKeyModifiers.None, () => _session.LastPage());
+        Add(VirtualKey.PageUp, VirtualKeyModifiers.None, GoToPreviousPage);
+        Add(VirtualKey.PageDown, VirtualKeyModifiers.None, GoToNextPage);
+        Add(VirtualKey.Home, VirtualKeyModifiers.None, GoToFirstPage);
+        Add(VirtualKey.End, VirtualKeyModifiers.None, GoToLastPage);
         Add(VirtualKey.Escape, VirtualKeyModifiers.None, () => _canvas.FitToViewport());
         Add(VirtualKey.F9, VirtualKeyModifiers.None, () => SetPerfOverlay(PerfText.Visibility != Visibility.Visible));
         Add(VirtualKey.F10, VirtualKeyModifiers.None, ToggleToolbar);
@@ -380,10 +603,10 @@ public sealed partial class MainWindow : Window
             case AppCommands.OpenPdf: _ = OpenPdfAsync(); break;
             case AppCommands.Undo: _ink.Undo(); break;
             case AppCommands.Redo: _ink.Redo(); break;
-            case AppCommands.PreviousPage: _session.PreviousPage(); break;
-            case AppCommands.NextPage: _session.NextPage(); break;
-            case AppCommands.FirstPage: _session.FirstPage(); break;
-            case AppCommands.LastPage: _session.LastPage(); break;
+            case AppCommands.PreviousPage: GoToPreviousPage(); break;
+            case AppCommands.NextPage: GoToNextPage(); break;
+            case AppCommands.FirstPage: GoToFirstPage(); break;
+            case AppCommands.LastPage: GoToLastPage(); break;
             case AppCommands.FitToViewport: _canvas.FitToViewport(); break;
             case AppCommands.ZoomIn: ZoomIn(); break;
             case AppCommands.ZoomOut: ZoomOut(); break;

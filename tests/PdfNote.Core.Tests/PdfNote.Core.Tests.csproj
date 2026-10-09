@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    純粋ロジック (Notebook / NotebookSession / NotebookSerializer / InkModel) の検証用。
+    WinUI / Win2D に依存しないファイルのみをリンクするため、Windows SDK TFM も不要。
+    依存パッケージなし (オフラインで実行可能)。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>PdfNote.Core.Tests</AssemblyName>
+    <RootNamespace>PdfNote.Core.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\PdfNote\Core\Notebook.cs" Link="Core\Notebook.cs" />
+    <Compile Include="..\..\src\PdfNote\Ink\InkModel.cs" Link="Ink\InkModel.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NoteDtos.cs" Link="Storage\NoteDtos.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NotebookDtos.cs" Link="Storage\NotebookDtos.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NotebookSerializer.cs" Link="Storage\NotebookSerializer.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NoteSerializer.cs" Link="Storage\NoteSerializer.cs" />
+    <Compile Include="..\..\src\PdfNote\Session\NotebookSession.cs" Link="Session\NotebookSession.cs" />
+  </ItemGroup>
+
+</Project>

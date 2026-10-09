@@ -21,6 +21,9 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
@@ -38,48 +41,56 @@
                     ToolTipService.ToolTip="PDF を開く (Ctrl+O)">
                 <FontIcon Glyph="&#xE8E5;" />
             </Button>
-            <Button x:Name="PrevButton" Grid.Column="1" Click="OnPrevPageClick"
+            <Button x:Name="NewBlankNotebookButton" Grid.Column="1" Click="OnNewBlankNotebookClick"
+                    ToolTipService.ToolTip="白紙ノートを新規作成 (A4 縦 × 10 ページ)">
+                <FontIcon Glyph="&#xE7C3;" />
+            </Button>
+            <ToggleButton x:Name="BackgroundToggleButton" Grid.Column="2" Click="OnToggleBackgroundClick"
+                          ToolTipService.ToolTip="現在ページの背景切替 (白紙 / 方眼)">
+                <FontIcon Glyph="&#xE71D;" />
+            </ToggleButton>
+            <Button x:Name="PrevButton" Grid.Column="3" Click="OnPrevPageClick"
                     ToolTipService.ToolTip="前のページ (PageUp)">
                 <FontIcon Glyph="&#xE72B;" />
             </Button>
-            <Button x:Name="NextButton" Grid.Column="2" Click="OnNextPageClick"
+            <Button x:Name="NextButton" Grid.Column="4" Click="OnNextPageClick"
                     ToolTipService.ToolTip="次のページ (PageDown)">
                 <FontIcon Glyph="&#xE72A;" />
             </Button>
-            <TextBlock x:Name="PageText" Grid.Column="3" VerticalAlignment="Center"
+            <TextBlock x:Name="PageText" Grid.Column="5" VerticalAlignment="Center"
                        FontSize="13" MinWidth="80" TextAlignment="Center" Text="-" />
-            <Border Grid.Column="4" />
-            <ToggleButton x:Name="PenToolButton" Grid.Column="5" Click="OnPenToolClick"
+            <Border Grid.Column="6" />
+            <ToggleButton x:Name="PenToolButton" Grid.Column="7" Click="OnPenToolClick"
                           ToolTipService.ToolTip="ペン (筆圧対応)">
                 <FontIcon Glyph="&#xEDFB;" />
             </ToggleButton>
-            <ToggleButton x:Name="EraserToolButton" Grid.Column="6" Click="OnEraserToolClick"
+            <ToggleButton x:Name="EraserToolButton" Grid.Column="8" Click="OnEraserToolClick"
                           ToolTipService.ToolTip="消しゴム (Stroke単位 / ペン裏ボタンでTemporaryEraser)">
                 <FontIcon Glyph="&#xED60;" />
             </ToggleButton>
-            <Button x:Name="UndoButton" Grid.Column="7" Click="OnUndoClick"
+            <Button x:Name="UndoButton" Grid.Column="9" Click="OnUndoClick"
                     ToolTipService.ToolTip="元に戻す (Ctrl+Z)">
                 <FontIcon Glyph="&#xE7A7;" />
             </Button>
-            <Button x:Name="RedoButton" Grid.Column="8" Click="OnRedoClick"
+            <Button x:Name="RedoButton" Grid.Column="10" Click="OnRedoClick"
                     ToolTipService.ToolTip="やり直し (Ctrl+Y)">
                 <FontIcon Glyph="&#xE7A6;" />
             </Button>
-            <Button x:Name="ZoomOutButton" Grid.Column="9" Click="OnZoomOutClick"
+            <Button x:Name="ZoomOutButton" Grid.Column="11" Click="OnZoomOutClick"
                     ToolTipService.ToolTip="縮小 (-)">
                 <FontIcon Glyph="&#xE71F;" />
             </Button>
-            <TextBlock x:Name="ZoomText" Grid.Column="10" VerticalAlignment="Center"
+            <TextBlock x:Name="ZoomText" Grid.Column="12" VerticalAlignment="Center"
                        FontSize="13" MinWidth="52" TextAlignment="Center" Text="100%" />
-            <Button x:Name="ZoomInButton" Grid.Column="11" Click="OnZoomInClick"
+            <Button x:Name="ZoomInButton" Grid.Column="13" Click="OnZoomInClick"
                     ToolTipService.ToolTip="拡大 (+)">
                 <FontIcon Glyph="&#xE8A3;" />
             </Button>
-            <ToggleButton x:Name="FpsToggle" Grid.Column="12" Click="OnFpsToggleClick"
+            <ToggleButton x:Name="FpsToggle" Grid.Column="14" Click="OnFpsToggleClick"
                           ToolTipService.ToolTip="FPSオーバーレイ (F9)" Content="FPS" />
-            <TextBlock x:Name="SaveStatusText" Grid.Column="13" VerticalAlignment="Center"
+            <TextBlock x:Name="SaveStatusText" Grid.Column="15" VerticalAlignment="Center"
                        FontSize="12" MinWidth="64" TextAlignment="Center" Text="" />
-            <Button x:Name="SettingsButton" Grid.Column="14" Click="OnSettingsClick"
+            <Button x:Name="SettingsButton" Grid.Column="16" Click="OnSettingsClick"
                     ToolTipService.ToolTip="設定 (ペンボタン / ショートカット)">
                 <FontIcon Glyph="&#xE713;" />
             </Button>
