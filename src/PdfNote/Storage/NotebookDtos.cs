@@ -21,8 +21,33 @@ public sealed class NotebookFileDto
     [JsonPropertyName("notebook")]
     public NotebookInfoDto? Notebook { get; set; }
 
+    /// <summary>PDF / 画像リソース (段階5で使用)。段階2〜4では常に空。</summary>
+    [JsonPropertyName("resources")]
+    public List<NotebookResourceDto>? Resources { get; set; }
+
     [JsonPropertyName("pages")]
     public List<NotebookPageFileDto>? Pages { get; set; }
+}
+
+/// <summary>外部リソース参照 (実体は assets/ に 1 回だけ格納。メタデータに重複埋め込みしない)。</summary>
+public sealed class NotebookResourceDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>"Pdf" / "Image"。</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "Pdf";
+
+    /// <summary>assets/ 内の相対パス。</summary>
+    [JsonPropertyName("fileName")]
+    public string FileName { get; set; } = string.Empty;
+
+    [JsonPropertyName("fileSize")]
+    public long FileSize { get; set; }
+
+    [JsonPropertyName("lastWriteTimeUtc")]
+    public string LastWriteTimeUtc { get; set; } = string.Empty;
 }
 
 public sealed class NotebookInfoDto

@@ -69,6 +69,8 @@ public static class NotebookSerializer
                 CreatedUtc = notebook.CreatedUtc.ToString("o"),
                 UpdatedUtc = notebook.UpdatedUtc.ToString("o"),
             },
+            // 段階5 (PDF/画像オブジェクト) で使用する。空配列を予約しておく。
+            Resources = [],
             Pages = pages,
         };
     }

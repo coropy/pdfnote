@@ -1,0 +1,37 @@
+<UserControl
+    x:Class="PdfNote.Home.HomeView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:storage="using:PdfNote.Storage">
+
+    <Grid Background="#FF202020" Padding="48,32">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="ノートブック" FontSize="28" FontWeight="SemiBold" />
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,16,0,16">
+            <Button x:Name="CreateButton" Click="OnCreateClick" Content="新規作成"
+                    ToolTipService.ToolTip="白紙ノート (A4 / 10ページ) を作成" />
+            <Button x:Name="OpenButton" Click="OnOpenClick" Content="開く" IsEnabled="False" />
+            <Button x:Name="RenameButton" Click="OnRenameClick" Content="名前変更" IsEnabled="False" />
+            <Button x:Name="DeleteButton" Click="OnDeleteClick" Content="削除" IsEnabled="False" />
+        </StackPanel>
+
+        <ListView x:Name="NotebookList" Grid.Row="2" SelectionMode="Single"
+                  IsItemClickEnabled="True" ItemClick="OnItemClicked">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="storage:NotebookSummary">
+                    <StackPanel Spacing="2" Padding="4,8">
+                        <TextBlock Text="{x:Bind Name}" FontSize="18" />
+                        <TextBlock FontSize="12" Foreground="#CCB0B0B0" Text="{x:Bind UpdatedText}" />
+                        <TextBlock FontSize="12" Foreground="#CCB0B0B0" Text="{x:Bind DetailText}"
+                                   IsTextSelectionEnabled="True" />
+                    </StackPanel>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </Grid>
+</UserControl>

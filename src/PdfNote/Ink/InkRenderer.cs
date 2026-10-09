@@ -28,8 +28,12 @@ public sealed class InkRenderer
     /// <summary>Ink Texture の総ピクセル上限 (PDF と同じ予算)。</summary>
     private const long MaxTexturePixels = 16_000_000;
 
+    /// <summary>Ink Texture の保持上限 (LRU)。上限超過分はストロークから再構築可能なので破棄する。</summary>
+    private const int TextureCacheCapacity = 4;
+
     private readonly CanvasDevice _device = CanvasDevice.GetSharedDevice();
     private readonly Dictionary<int, PageTexture> _textures = new();
+    private readonly TextureLru _lru = new(TextureCacheCapacity);
     private readonly Dictionary<int, (double WidthPt, double HeightPt)> _pageGeometry = new();
     private double _displayPxPerPt = RenderScale.DefaultPxPerPt;
 
@@ -52,6 +56,8 @@ public sealed class InkRenderer
             entry.Texture = null;
             entry.Dirty = true;
         }
+
+        _lru.MarkUsed(pageIndex);
     }
 
     public void MarkAllDirty()
@@ -71,6 +77,8 @@ public sealed class InkRenderer
             entry.Texture?.Dispose();
             _textures.Remove(pageIndex);
         }
+
+        _lru.Remove(pageIndex);
         _pageGeometry.Remove(pageIndex);
     }
 
@@ -80,8 +88,23 @@ public sealed class InkRenderer
         {
             entry.Texture?.Dispose();
         }
+
         _textures.Clear();
+        _lru.Clear();
         _pageGeometry.Clear();
+    }
+
+    /// <summary>LRU 上限超過のテクスチャを破棄する (ストロークから再構築可能)。</summary>
+    private void EvictOverCapacity(int protectedPageIndex)
+    {
+        foreach (var pageIndex in _lru.Evict(protectedPageIndex))
+        {
+            if (_textures.TryGetValue(pageIndex, out var entry))
+            {
+                entry.Texture?.Dispose();
+                _textures.Remove(pageIndex);
+            }
+        }
     }
 
     /// <summary>
@@ -96,6 +119,10 @@ public sealed class InkRenderer
             var entry = EnsureTexture(pageIndex, page);
             if (entry?.Texture is { } texture)
             {
+                // 上限超過分を破棄する (現在描画中のページは保護)。
+                _lru.MarkUsed(pageIndex);
+                EvictOverCapacity(pageIndex);
+
                 // 行列は行ベクトル規約 (A * B は A を先に適用)。
                 // テクスチャpx → pt への変換を先にかけ、その後ページ空間 (表示スケール+パン) へ。
                 // (baseTransform を先にかけるとパン速度が 1/pxPerPt 倍になり視差が発生する)
@@ -132,6 +159,7 @@ public sealed class InkRenderer
             return;
         }
 
+        _lru.MarkUsed(page);
         using var drawingSession = entry.Texture.CreateDrawingSession();
         drawingSession.Transform = Matrix3x2.CreateScale((float)entry.PxPerPt);
         DrawStrokeSegments(drawingSession, stroke);

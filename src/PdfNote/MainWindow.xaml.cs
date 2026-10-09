@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using PdfNote.Core;
 using PdfNote.Diagnostics;
+using PdfNote.Home;
 using PdfNote.Ink;
 using PdfNote.Input;
 using PdfNote.Session;
@@ -124,6 +125,13 @@ public sealed partial class MainWindow : Window
 
         RegisterShortcuts();
         UpdateToolbar();
+
+        // ホーム画面 (ノートブック一覧)。起動時はホームを表示する。
+        HomeViewElement.CreateRequested += name => _ = CreateAndOpenNotebookAsync(name, PageBackgroundKind.Plain);
+        HomeViewElement.OpenRequested += summary => _ = OpenNotebookAsync(summary);
+        HomeViewElement.RenameRequested += summary => _ = RenameNotebookAsync(summary);
+        HomeViewElement.DeleteRequested += summary => _ = DeleteNotebookAsync(summary);
+        ShowHome();
 
         Closed += (_, _) =>
         {
@@ -326,6 +334,9 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenPdfAsync()
     {
+        // ホーム表示中はエディタへ切り替えてからピッカーを出す。
+        HideHome();
+
         var picker = new Windows.Storage.Pickers.FileOpenPicker();
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
         picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
@@ -402,17 +413,237 @@ public sealed partial class MainWindow : Window
     }
 
     // ------------------------------------------------------------
-    // ノートブック (白紙ノート) モード。段階2 最小実装:
-    // 作成はツールバー「白紙ノート」のみ。保存は自動保存 (v2 最小形式) のみで、
-    // 開き直し UI は段階4 (ホーム画面) で対応する。
+    // ホーム画面 (ノートブック一覧) とノートブックモード。
+    // 保存は NotebookLibrary (<名前>-<短ID>/notebook.json + assets/) で行う。
     // ------------------------------------------------------------
-    private void OnNewBlankNotebookClick(object sender, RoutedEventArgs e)
+    private bool IsHomeVisible => HomeViewElement.Visibility == Visibility.Visible;
+
+    private void ShowHome()
     {
+        HomeViewElement.Visibility = Visibility.Visible;
+        ToolbarGrid.Visibility = Visibility.Collapsed;
+        RefreshHome();
+    }
+
+    private void HideHome()
+    {
+        HomeViewElement.Visibility = Visibility.Collapsed;
+        ToolbarGrid.Visibility = Visibility.Visible;
+    }
+
+    private void RefreshHome()
+    {
+        _ = Task.Run(() => NotebookLibrary.List(NotebookLibrary.DefaultRoot))
+            .ContinueWith(
+                task => DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (task.Status == TaskStatus.RanToCompletion)
+                    {
+                        HomeViewElement.Refresh(task.Result);
+                    }
+                }),
+                TaskScheduler.Default);
+    }
+
+    private void OnHomeClick(object sender, RoutedEventArgs e)
+    {
+        if (IsHomeVisible)
+        {
+            HideHome();
+        }
+        else
+        {
+            ShowHome();
+        }
+    }
+
+    /// <summary>現在のコンテキストの未保存データを確定させる (ノート切替 / 削除 / 名前変更の前)。</summary>
+    private async Task QuiesceCurrentContextAsync()
+    {
+        if (IsNotebookMode && _notebookAutoSave is not null)
+        {
+            await _notebookAutoSave.FlushPendingAsync();
+        }
+        else if (_autoSave.IsDirty)
+        {
+            _autoSave.SaveNowSync();
+        }
+    }
+
+    private async void OnNewBlankNotebookClick(object sender, RoutedEventArgs e) =>
+        await CreateAndOpenNotebookAsync("無題ノート", PageBackgroundKind.Plain);
+
+    /// <summary>白紙ノートを作成して開く。保存先は NotebookLibrary のフォルダ。</summary>
+    private async Task CreateAndOpenNotebookAsync(string displayName, PageBackgroundKind background)
+    {
+        if (_dialogOpen)
+        {
+            return;
+        }
+
         var session = NotebookSession.CreateNew(
             NotebookDefaults.A4WidthPt,
             NotebookDefaults.A4HeightPt,
-            PageBackgroundKind.Plain);
-        ActivateNotebook(session);
+            background);
+
+        string folder;
+        try
+        {
+            folder = await Task.Run(() =>
+                NotebookLibrary.Create(NotebookLibrary.DefaultRoot, displayName, session.Notebook));
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("ノートブックを作成できませんでした", Describe(ex));
+            return;
+        }
+
+        HideHome();
+        ActivateNotebook(session, Path.Combine(folder, NotebookLibrary.NotebookFileName));
+    }
+
+    /// <summary>既存ノートブックを開き、ページ・背景・ストロークを復元する。</summary>
+    private async Task OpenNotebookAsync(NotebookSummary summary)
+    {
+        if (_dialogOpen)
+        {
+            return;
+        }
+
+        if (summary.IsBroken)
+        {
+            await ShowErrorAsync(
+                "ノートブックを開けませんでした",
+                $"このノートブックのデータは壊れています:\n{summary.FolderPath}");
+            return;
+        }
+
+        try
+        {
+            var jsonPath = Path.Combine(summary.FolderPath, NotebookLibrary.NotebookFileName);
+            var notebook = await Task.Run(() =>
+                NotebookSerializer.ToNotebook(NotebookSerializer.LoadFile(jsonPath)));
+
+            await QuiesceCurrentContextAsync();
+            HideHome();
+            ActivateNotebook(new NotebookSession(notebook), jsonPath);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("ノートブックを開けませんでした", Describe(ex));
+        }
+    }
+
+    /// <summary>名前変更 (確認ダイアログ → json 更新 → フォルダ名変更)。</summary>
+    private async Task RenameNotebookAsync(NotebookSummary summary)
+    {
+        if (_dialogOpen)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var input = new TextBox { Text = summary.Name };
+            var dialog = new ContentDialog
+            {
+                Title = "ノートブック名を変更",
+                Content = input,
+                PrimaryButtonText = "変更",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            var isCurrentlyOpen = IsNotebookMode && _notebook!.Notebook.Id == summary.Id;
+            if (isCurrentlyOpen)
+            {
+                await _notebookAutoSave!.FlushPendingAsync();
+            }
+
+            string finalFolder;
+            try
+            {
+                finalFolder = await Task.Run(() => NotebookLibrary.Rename(summary.FolderPath, input.Text));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("名前を変更できませんでした", Describe(ex));
+                return;
+            }
+
+            if (isCurrentlyOpen)
+            {
+                _notebookAutoSave!.SavePath = Path.Combine(finalFolder, NotebookLibrary.NotebookFileName);
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
+    }
+
+    /// <summary>削除 (確認ダイアログでパス・ページ数・ストローク数を明示)。</summary>
+    private async Task DeleteNotebookAsync(NotebookSummary summary)
+    {
+        if (_dialogOpen)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "ノートブックを削除しますか？",
+                Content = $"次のフォルダとその内容を削除します。この操作は取り消せません。\n\n" +
+                          $"{summary.FolderPath}\n\n" +
+                          $"ページ数: {summary.PageCount}\nストローク数: {summary.StrokeCount}",
+                PrimaryButtonText = "削除",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            // 対象が開いていれば保存を完了させてからモードを破棄 (削除後の再保存を防ぐ)。
+            if (IsNotebookMode && _notebook!.Notebook.Id == summary.Id)
+            {
+                await _notebookAutoSave!.FlushPendingAsync();
+                DetachNotebookCore(save: false);
+            }
+            else
+            {
+                await QuiesceCurrentContextAsync();
+            }
+
+            try
+            {
+                await Task.Run(() => NotebookLibrary.Delete(summary.FolderPath));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("削除できませんでした", Describe(ex));
+                return;
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
     }
 
     private void OnToggleBackgroundClick(object sender, RoutedEventArgs e)
@@ -434,7 +665,8 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>ノートブックモードへ切り替える (呼び出しは UI スレッド)。</summary>
-    private void ActivateNotebook(NotebookSession session)
+    /// <param name="savePath">自動保存先 (notebook.json の完全パス)。Id と内容はノートブック側と一致していること。</param>
+    private void ActivateNotebook(NotebookSession session, string savePath)
     {
         // 直前のコンテキストを確定保存してから切替える。
         if (IsNotebookMode)
@@ -455,14 +687,6 @@ public sealed partial class MainWindow : Window
         // PDF の再レンダリングを停止し、表示をノートブックに置き換える。
         _session.Close();
         _canvas.ClearFrame();
-
-        // 自動保存先: %LOCALAPPDATA%\PdfNote\Notebooks\blank-notebook.nb.json (単一スロット)。
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PdfNote",
-            "Notebooks");
-        Directory.CreateDirectory(directory);
-        var savePath = Path.Combine(directory, "blank-notebook.nb.json");
 
         var autoSave = new NotebookAutoSave(session, DispatcherQueue) { SavePath = savePath };
         autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(() =>

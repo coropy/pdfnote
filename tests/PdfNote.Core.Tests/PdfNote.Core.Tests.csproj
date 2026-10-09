@@ -22,6 +22,9 @@
     <Compile Include="..\..\src\PdfNote\Storage\NotebookDtos.cs" Link="Storage\NotebookDtos.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NotebookSerializer.cs" Link="Storage\NotebookSerializer.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NoteSerializer.cs" Link="Storage\NoteSerializer.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NotebookLibrary.cs" Link="Storage\NotebookLibrary.cs" />
+    <Compile Include="..\..\src\PdfNote\Storage\NotebookSlotMigrator.cs" Link="Storage\NotebookSlotMigrator.cs" />
+    <Compile Include="..\..\src\PdfNote\Ink\TextureLru.cs" Link="Ink\TextureLru.cs" />
     <Compile Include="..\..\src\PdfNote\Session\NotebookSession.cs" Link="Session\NotebookSession.cs" />
   </ItemGroup>
 

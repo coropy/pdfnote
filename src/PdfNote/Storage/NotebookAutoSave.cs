@@ -28,6 +28,7 @@ public sealed class NotebookAutoSave : IDisposable
     private volatile bool _resaveQueued;
     private int _saving;
     private bool _hasContext;
+    private Task? _saveTask;
 
     public double LastSaveMs { get; private set; } = -1;
     public long LastFileBytes { get; private set; } = -1;
@@ -125,7 +126,44 @@ public sealed class NotebookAutoSave : IDisposable
             return;
         }
 
-        _ = SaveAsyncCore();
+        _saveTask = SaveAsyncCore();
+    }
+
+    /// <summary>
+    /// 保留中の保存を完了させる (ノート切替 / 削除 / 名前変更の前)。UI スレッドから呼ぶ。
+    /// 完了後も Dirty な場合のみ、その場で同期保存する (不要な同期 I/O は行わない)。
+    /// </summary>
+    public async Task FlushPendingAsync()
+    {
+        if (!_hasContext)
+        {
+            return;
+        }
+
+        _timer.Stop();
+        Task? task;
+        lock (_gate)
+        {
+            task = _saveTask;
+            _saveTask = null;
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                await task; // 例外は SaveAsyncCore 内で処理済み。
+            }
+            catch
+            {
+                // 到達しないが安全側で握りつぶす。
+            }
+        }
+
+        if (_dirty)
+        {
+            SaveNowSync();
+        }
     }
 
     private async Task SaveAsyncCore()

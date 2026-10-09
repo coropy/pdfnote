@@ -17,6 +17,12 @@ internal static class Program
         NotebookSerializerTests.SecondSaveCreatesBackup(Check);
         NotebookSerializerTests.DropsInvalidStrokesWithoutCrashing(Check);
         NotebookSerializerTests.RejectsUnknownVersion(Check);
+        NotebookLibraryTests.CreateListFindDelete(Check);
+        NotebookLibraryTests.RenameKeepsIdAndFallsBack(Check);
+        NotebookLibraryTests.SaveRestoreRoundTripAcrossRestart(Check);
+        NotebookMigrationTests.MigratesLegacySlotNonDestructively(Check);
+        NotebookMigrationTests.DtoIsForwardCompatible(Check);
+        NotebookMigrationTests.TextureLruEviction(Check);
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"
