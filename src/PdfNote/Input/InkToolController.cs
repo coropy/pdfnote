@@ -28,11 +28,22 @@ public sealed class InkToolController
         }
     }
 
-    /// <summary>バレルボタンのアクション (一時上書き判定に使用)。</summary>
+    /// <summary>バレルボタンのアクション (InkSession からの互換取得用)。</summary>
     public InputAction BarrelAction => _buttonMap.Get(InkButton.Barrel);
 
+    /// <summary>パンが一時アクションとして有効 (押している間パン)。</summary>
+    public bool IsPanTemporary => _temporaryAction == InputAction.Pan;
+
+    /// <summary>何らかの一時アクション中か。</summary>
+    public bool IsTemporaryActive => _temporaryAction is not null;
+
     private InkTool _baseTool = InkTool.Pen;
+
+    /// <summary>一時アクション (押している間だけ有効)。</summary>
     private InputAction? _temporaryAction;
+
+    /// <summary>一時アクションの発生源 (ボタン/消しゴム端)。設定変更中でも解放時に正しく復帰させるために保持する。</summary>
+    private InkButton? _temporarySource;
 
     /// <summary>ツールが変わった (UI 更新用)。</summary>
     public event Action<InkTool>? ToolChanged;
@@ -49,6 +60,26 @@ public sealed class InkToolController
 
         _baseTool = tool;
         ToolChanged?.Invoke(CurrentTool);
+    }
+
+    /// <summary>
+    /// 設定UIからボタン割当を変更する (設定変更の唯一の入口)。
+    /// 実行中の一時アクションは「押している間」はそのまま維持し、解放時に復帰する。
+    /// </summary>
+    public void ApplyButtonAssignment(InkButton button, InputAction action)
+    {
+        if (!PenButtonMap.IsSupported(action))
+        {
+            return;
+        }
+
+        _buttonMap.Set(button, action);
+    }
+
+    /// <summary>既定の割当 (バレル=TemporaryEraser, 消しゴム端=Eraser) に戻す。</summary>
+    public void ResetButtonAssignments()
+    {
+        _buttonMap.ResetToDefaults();
     }
 
     /// <summary>ボタン押下時: 一時アクションの開始 / 単発アクションの実行要求。</summary>
@@ -69,6 +100,7 @@ public sealed class InkToolController
                 if (_temporaryAction is null)
                 {
                     _temporaryAction = action;
+                    _temporarySource = button;
                     ToolChanged?.Invoke(CurrentTool);
                 }
                 break;
@@ -77,39 +109,41 @@ public sealed class InkToolController
             case InputAction.Redo:
             case InputAction.PreviousPage:
             case InputAction.NextPage:
-            case InputAction.RightClick:
-            case InputAction.CustomShortcut:
                 ActionRequested?.Invoke(action);
                 break;
         }
     }
 
-    /// <summary>ボタン解放時: 一時アクションの終了。</summary>
+    /// <summary>ボタン解放時: 一時アクションの終了。発生源を見るため設定変更中でも安全。</summary>
     public void ButtonUp(InkButton button)
     {
-        var action = _buttonMap.Get(button);
-        if (_temporaryAction == action)
+        if (_temporarySource == button)
         {
             _temporaryAction = null;
+            _temporarySource = null;
             ToolChanged?.Invoke(CurrentTool);
         }
     }
 
-    /// <summary>裏消しゴム端が接触した場合の一時ツール切替。</summary>
+    /// <summary>裏消しゴム端の接触による一時ツール切替 (割当が Eraser 相当のとき)。</summary>
     public void SetEraserEndActive(bool active)
     {
         if (active)
         {
             if (_temporaryAction is null)
             {
-                _temporaryAction = InputAction.Eraser;
+                // 消しゴム端はハードウェアとして「消す」機能のため、割当が None でも Eraser を優先する。
+                var assigned = _buttonMap.Get(InkButton.EraserEnd);
+                _temporaryAction = assigned == InputAction.Eraser || assigned == InputAction.TemporaryEraser
+                    ? assigned
+                    : InputAction.Eraser;
+                _temporarySource = InkButton.EraserEnd;
                 ToolChanged?.Invoke(CurrentTool);
             }
         }
-        else if (_temporaryAction == InputAction.Eraser && _buttonMap.Get(InkButton.EraserEnd) == InputAction.Eraser)
+        else
         {
-            _temporaryAction = null;
-            ToolChanged?.Invoke(CurrentTool);
+            ButtonUp(InkButton.EraserEnd);
         }
     }
 }

@@ -1,0 +1,77 @@
+<ContentDialog
+    x:Class="PdfNote.Settings.SettingsDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="設定"
+    PrimaryButtonText="保存"
+    CloseButtonText="キャンセル"
+    DefaultButton="Primary">
+
+    <ScrollViewer MaxHeight="480">
+        <StackPanel Spacing="12" MinWidth="420">
+
+            <TextBlock Text="ペンボタンの割り当て" FontWeight="SemiBold" />
+            <TextBlock Text="対応していないペンではバレルボタン / 消しゴム端が検出されない場合があります。"
+                       FontSize="12" Opacity="0.7" TextWrapping="Wrap" />
+            <Grid ColumnSpacing="8" RowSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="バレルボタン:" VerticalAlignment="Center" />
+                <ComboBox x:Name="BarrelCombo" Grid.Row="0" Grid.Column="1"
+                          SelectedIndex="0" MinWidth="200" HorizontalAlignment="Left" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="消しゴム端:" VerticalAlignment="Center" />
+                <ComboBox x:Name="EraserEndCombo" Grid.Row="1" Grid.Column="1"
+                          SelectedIndex="0" MinWidth="200" HorizontalAlignment="Left" />
+            </Grid>
+
+            <Button Content="既定値に戻す (消しゴム)" Click="OnResetDefaultsClick" />
+
+            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+            <TextBlock Text="カスタムショートカット" FontWeight="SemiBold" />
+            <Grid ColumnSpacing="8" RowSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="コマンド:" VerticalAlignment="Center" />
+                <ComboBox x:Name="CommandCombo" Grid.Row="0" Grid.Column="1"
+                          SelectedIndex="0" MinWidth="240" HorizontalAlignment="Left" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="キー:" VerticalAlignment="Center" />
+                <Button x:Name="KeyCaptureButton" Grid.Row="1" Grid.Column="1"
+                        Content="クリックしてキーを指定" MinWidth="240" HorizontalAlignment="Left"
+                        Click="OnKeyCaptureClick" KeyDown="OnCaptureKeyDown" />
+
+                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                            Orientation="Horizontal" Spacing="8">
+                    <Button Content="追加" Click="OnAddShortcutClick" />
+                    <Button Content="削除" Click="OnRemoveShortcutClick" />
+                </StackPanel>
+            </Grid>
+
+            <TextBlock x:Name="ShortcutMessage" FontSize="12" TextWrapping="Wrap" MinHeight="20" />
+
+            <ListBox x:Name="ShortcutList" MinHeight="80" MaxHeight="140"
+                     SelectionMode="Single" />
+
+            <TextBlock Text="設定はローカル (PC内) のみに保存されます。"
+                       FontSize="12" Opacity="0.7" />
+
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

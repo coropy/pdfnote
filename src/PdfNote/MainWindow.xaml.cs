@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
@@ -8,7 +9,9 @@ using Microsoft.UI.Xaml.Media;
 using PdfNote.Core;
 using PdfNote.Diagnostics;
 using PdfNote.Ink;
+using PdfNote.Input;
 using PdfNote.Session;
+using PdfNote.Settings;
 using PdfNote.Storage;
 using PdfNote.View;
 using Windows.System;
@@ -23,6 +26,9 @@ public sealed partial class MainWindow : Window
     private readonly InkSession _ink;
     private readonly NoteAutoSave _autoSave;
     private readonly Stopwatch _stopwatch = new();
+    private AppSettings _settings = new();
+    private readonly List<KeyboardAccelerator> _customAccelerators = new();
+    private readonly HashSet<(int Key, int Modifiers)> _reservedKeys = new();
     private bool _dialogOpen;
     private bool _renderErrorShown;
 
@@ -31,10 +37,22 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         Title = "PdfNote";
 
+        // 設定をローカルから読み込む (初回は既定値。破損時は既定値 + 警告)。
+        _settings = AppSettingsStore.Load(out var settingsWarning);
+
         _canvas = new PdfCanvas();
         ContentHost.Children.Insert(0, _canvas);
 
         _ink = new InkSession(_canvas, _perf);
+
+        // 設定境界を通してペンボタン割当を適用 (Ink Model / 入力処理には直接触れない)。
+        _ink.ApplyButtonAssignment(InkButton.Barrel, _settings.BarrelAction);
+        _ink.ApplyButtonAssignment(InkButton.EraserEnd, _settings.EraserEndAction);
+        if (settingsWarning is not null)
+        {
+            var warning = settingsWarning;
+            DispatcherQueue.TryEnqueue(() => _ = ShowSettingsWarningAsync(warning));
+        }
         _autoSave = new NoteAutoSave(_ink, DispatcherQueue);
         _ink.ContentChanged += () => _autoSave.OnContentChanged();
         _autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(
@@ -308,6 +326,8 @@ public sealed partial class MainWindow : Window
         Add(VirtualKey.Subtract, VirtualKeyModifiers.None, ZoomOut);
         Add((VirtualKey)187, VirtualKeyModifiers.None, ZoomIn);  // メインキーボード "+"
         Add((VirtualKey)189, VirtualKeyModifiers.None, ZoomOut); // メインキーボード "-"
+
+        RegisterCustomShortcuts();
     }
 
     private void Add(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
@@ -319,6 +339,106 @@ public sealed partial class MainWindow : Window
             action();
         };
         RootGrid.KeyboardAccelerators.Add(accelerator);
+        _reservedKeys.Add(((int)key, (int)modifiers));
     }
+
+    /// <summary>設定に基づいてカスタムショートカットを (再) 登録する。既存のカスタム分は一度解除。</summary>
+    private void RegisterCustomShortcuts()
+    {
+        foreach (var accelerator in _customAccelerators)
+        {
+            _ = RootGrid.KeyboardAccelerators.Remove(accelerator);
+        }
+
+        _customAccelerators.Clear();
+
+        foreach (var shortcut in _settings.CustomShortcuts)
+        {
+            if (!AppCommands.Exists(shortcut.Command) || shortcut.Key == 0)
+            {
+                continue;
+            }
+
+            var key = (VirtualKey)shortcut.Key;
+            var modifiers = (VirtualKeyModifiers)shortcut.Modifiers;
+            var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+            accelerator.Invoked += (_, args) =>
+            {
+                args.Handled = true;
+                RunCommand(shortcut.Command);
+            };
+            RootGrid.KeyboardAccelerators.Add(accelerator);
+            _customAccelerators.Add(accelerator);
+        }
+    }
+
+    /// <summary>カスタムショートカット / コマンドID の実行。</summary>
+    private void RunCommand(string commandId)
+    {
+        switch (commandId)
+        {
+            case AppCommands.OpenPdf: _ = OpenPdfAsync(); break;
+            case AppCommands.Undo: _ink.Undo(); break;
+            case AppCommands.Redo: _ink.Redo(); break;
+            case AppCommands.PreviousPage: _session.PreviousPage(); break;
+            case AppCommands.NextPage: _session.NextPage(); break;
+            case AppCommands.FirstPage: _session.FirstPage(); break;
+            case AppCommands.LastPage: _session.LastPage(); break;
+            case AppCommands.FitToViewport: _canvas.FitToViewport(); break;
+            case AppCommands.ZoomIn: ZoomIn(); break;
+            case AppCommands.ZoomOut: ZoomOut(); break;
+            case AppCommands.PenTool: _ink.SetTool(InkTool.Pen); break;
+            case AppCommands.EraserTool: _ink.SetTool(InkTool.Eraser); break;
+            case AppCommands.TogglePerfOverlay: SetPerfOverlay(PerfText.Visibility != Visibility.Visible); break;
+            case AppCommands.ToggleToolbar: ToggleToolbar(); break;
+        }
+    }
+
+    private void OnSettingsClick(object sender, RoutedEventArgs e) => _ = ShowSettingsAsync();
+
+    private async Task ShowSettingsAsync()
+    {
+        if (_dialogOpen || Content.XamlRoot is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var dialog = new SettingsDialog(_settings, _reservedKeys) { XamlRoot = Content.XamlRoot };
+            await dialog.ShowAsync();
+
+            if (dialog.Result is null)
+            {
+                return; // キャンセル: 現在の設定を維持。
+            }
+
+            try
+            {
+                AppSettingsStore.Save(dialog.Result);
+            }
+            catch (Exception saveEx)
+            {
+                // 保存失敗時は現在の動作設定を維持し、ユーザーへ通知。
+                App.LogError("設定の保存に失敗しました。", saveEx);
+                await ShowErrorAsync("設定の保存に失敗しました", Describe(saveEx));
+                return;
+            }
+
+            // 保存成功後に適用 (適用中のペン入力整合性は InkToolController 側で保証)。
+            _settings = dialog.Result;
+            _ink.ApplyButtonAssignment(InkButton.Barrel, _settings.BarrelAction);
+            _ink.ApplyButtonAssignment(InkButton.EraserEnd, _settings.EraserEndAction);
+            RegisterCustomShortcuts();
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+    }
+
+    private async Task ShowSettingsWarningAsync(string warning) =>
+        await ShowErrorAsync("設定の読み込み", warning);
 }
 

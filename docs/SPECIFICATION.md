@@ -136,6 +136,23 @@ PDF ─▶ PDF Renderer (バックグラウンドスレッド, PDFium)
 
 ツール状態は「基本ツール + 一時上書き」の状態機械で管理し、設定変更時にInk Layer自体を変更しない。
 
+### 8.1a ペンボタン設定 (v0.4実装)
+
+- 設定UI候補 (実装済みのみ): None / Pen / Eraser / TemporaryEraser / Highlighter(β) / Undo / Redo / PreviousPage / NextPage / Pan。
+  **RightClick / CustomShortcut は未実装のため候補から除外** (見かけだけ選べる状態を作らない)
+- 一時アクションは「発生源ボタン」を記録 → **押下中に設定を変更しても解放時に正しく元のツールへ復帰**
+- 消しゴム端はハードウェア機能のため、割当が None でも Eraser として動作
+- 設定変更は必ず `InkToolController.ApplyButtonAssignment()` 経由 (Ink Model / 入力処理には直接触れない)
+
+### 8.1b アプリ設定 (v0.4実装)
+
+- 保存先: `%LOCALAPPDATA%\PdfNote\settings.json` (ローカルのみ、クラウド/テレメトリなし、ユーザー固有情報は記録しない)
+- 形式: JSON、`formatVersion` 必須 (.note と同じ規約)。原子保存 (.tmp → Flush(flushToDisk) → Replace/Move)
+- 破損 / 不明バージョン / 欠損 → 既定値で復旧 + 警告ダイアログ (既存ファイルは削除しない)
+- 保存失敗時: 現在の動作設定を維持し、ユーザーへ通知
+- カスタムショートカット: 実装済み14コマンドに割当可能。修飾キー (Ctrl/Shift/Alt/Win) 必須、
+  修飾キーのみ/Esc/既存(組み込み+登録済み)との競合は拒否。Escでキャプチャキャンセル。グローバルフックは実装しない
+
 ## 8.2 Ink Model (v0.2)
 
 - 階層: `InkDocument ─ InkPage(PageIndex) └ Stroke[]`

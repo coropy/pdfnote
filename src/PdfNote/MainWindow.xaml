@@ -31,6 +31,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <Button x:Name="OpenButton" Grid.Column="0" Click="OnOpenClick"
@@ -78,6 +79,10 @@
                           ToolTipService.ToolTip="FPSオーバーレイ (F9)" Content="FPS" />
             <TextBlock x:Name="SaveStatusText" Grid.Column="13" VerticalAlignment="Center"
                        FontSize="12" MinWidth="64" TextAlignment="Center" Text="" />
+            <Button x:Name="SettingsButton" Grid.Column="14" Click="OnSettingsClick"
+                    ToolTipService.ToolTip="設定 (ペンボタン / ショートカット)">
+                <FontIcon Glyph="&#xE713;" />
+            </Button>
         </Grid>
 
         <!-- PDF 表示領域 (PdfCanvas はコードビハインドで追加) -->

@@ -67,6 +67,13 @@ public sealed class InkSession
     /// <summary>ツールを設定する (ツールバーボタン)。</summary>
     public void SetTool(InkTool tool) => _tools.SetBaseTool(tool);
 
+    /// <summary>設定UIからペンボタン割当を変更する (設定境界。Ink Model には触れない)。</summary>
+    public void ApplyButtonAssignment(InkButton button, InputAction action) =>
+        _tools.ApplyButtonAssignment(button, action);
+
+    /// <summary>ペンボタン割当を既定値に戻す。</summary>
+    public void ResetButtonAssignments() => _tools.ResetButtonAssignments();
+
     /// <summary>Undo 操作。</summary>
     public void Undo()
     {
@@ -264,8 +271,8 @@ public sealed class InkSession
     {
         var position = new Vector2(e.XPt, e.YPt);
 
-        // Pan アクション中のバレルボタンはパン。
-        if (_tools.BarrelAction == InputAction.Pan && _barrelDown)
+        // パン一時アクション (押している間パン)。発生源はバレルボタン等。
+        if (_tools.IsPanTemporary)
         {
             _panning = true;
             _lastPanPosition = position;
