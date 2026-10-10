@@ -134,6 +134,16 @@ public sealed class InkSession
     public bool KeepPageTextures { get; set; }
 
     /// <summary>
+    /// 外部 (NotebookSession のオブジェクト操作など) から操作履歴に積む (追加 API)。
+    /// 既存のペン入力経路は変更しない。
+    /// </summary>
+    public void PushOperation(IInkOperation operation)
+    {
+        _undo.Push(operation);
+        UndoRedoChanged?.Invoke(_undo.CanUndo, _undo.CanRedo);
+    }
+
+    /// <summary>
     /// ノートブックのページ (InkPage) をこのセッションに共有登録する。
     /// 渡された InkPage インスタンスは NotebookPage 側と同一のため、状態の二重化は発生しない。
     /// UI スレッドから呼ぶ。

@@ -55,9 +55,8 @@ public sealed class InkRenderer
             entry.Texture?.Dispose();
             entry.Texture = null;
             entry.Dirty = true;
+            _lru.MarkUsed(pageIndex); // テクスチャが実在する場合のみ LRU 順序を更新。
         }
-
-        _lru.MarkUsed(pageIndex);
     }
 
     public void MarkAllDirty()

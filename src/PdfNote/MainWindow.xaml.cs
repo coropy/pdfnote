@@ -484,7 +484,8 @@ public sealed partial class MainWindow : Window
         var session = NotebookSession.CreateNew(
             NotebookDefaults.A4WidthPt,
             NotebookDefaults.A4HeightPt,
-            background);
+            background,
+            pushOperation: _ink.PushOperation);
 
         string folder;
         try
@@ -526,7 +527,7 @@ public sealed partial class MainWindow : Window
 
             await QuiesceCurrentContextAsync();
             HideHome();
-            ActivateNotebook(new NotebookSession(notebook), jsonPath);
+            ActivateNotebook(new NotebookSession(notebook, _ink.PushOperation), jsonPath);
         }
         catch (Exception ex)
         {

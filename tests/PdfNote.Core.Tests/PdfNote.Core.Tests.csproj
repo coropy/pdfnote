@@ -17,7 +17,10 @@
 
   <ItemGroup>
     <Compile Include="..\..\src\PdfNote\Core\Notebook.cs" Link="Core\Notebook.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\PageObjectTransform.cs" Link="Core\PageObjectTransform.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\PageObjectOperations.cs" Link="Core\PageObjectOperations.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\InkModel.cs" Link="Ink\InkModel.cs" />
+    <Compile Include="..\..\src\PdfNote\Ink\InkOperations.cs" Link="Ink\InkOperations.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NoteDtos.cs" Link="Storage\NoteDtos.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NotebookDtos.cs" Link="Storage\NotebookDtos.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NotebookSerializer.cs" Link="Storage\NotebookSerializer.cs" />

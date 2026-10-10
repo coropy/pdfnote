@@ -29,6 +29,17 @@ internal static class Program
         NotebookObjectTransformTests.ObjectTransformNeverTouchesStrokes(Check);
         NotebookObjectValidationTests.RotationAndSizeValidation(Check);
         NotebookObjectValidationTests.SoftCapDoesNotBlockModel(Check);
+        PdfResourceImportTests.ImportPreservesSourceHash(Check);
+        PdfResourceImportTests.ImportTwiceDoesNotOverwrite(Check);
+        PdfResourceFailureTests.CopyFailureLeavesNothing(Check);
+        PdfResourceFailureTests.RelativePathSurvivesReopen(Check);
+        PdfObjectOperationTests.AddValidationAndSoftLimit(Check);
+        PdfObjectOperationTests.DirtyAndSaveRoundTrip(Check);
+        PdfObjectUndoTests.UndoRedoAddRemoveTransformZ(Check);
+        PdfObjectUndoTests.MixedStrokeAndObjectHistory(Check);
+        PdfObjectIsolationTests.StrokesInvariantAfterObjectOps(Check);
+        PdfObjectIsolationTests.NotebookSwitchIsolatesHistory(Check);
+        PdfObjectIsolationTests.StaleOperationIsSafe(Check);
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"

@@ -15,6 +15,7 @@ namespace PdfNote.Session;
 public sealed class NotebookSession
 {
     private readonly Notebook _notebook;
+    private readonly Action<IInkOperation>? _pushOperation;
     private int _currentPage = -1;
 
     /// <summary>現在ページが変わった (呼び出しスレッド)。</summary>
@@ -23,9 +24,10 @@ public sealed class NotebookSession
     /// <summary>背景設定など、ストローク以外のページ内容が変わった (自動保存トリガー)。</summary>
     public event Action? ContentChanged;
 
-    public NotebookSession(Notebook notebook)
+    public NotebookSession(Notebook notebook, Action<IInkOperation>? pushOperation = null)
     {
         _notebook = notebook;
+        _pushOperation = pushOperation;
     }
 
     /// <summary>白紙ノートを新規作成する。</summary>
@@ -33,7 +35,8 @@ public sealed class NotebookSession
         double widthPt,
         double heightPt,
         PageBackgroundKind background,
-        int pageCount = NotebookDefaults.DefaultPageCount)
+        int pageCount = NotebookDefaults.DefaultPageCount,
+        Action<IInkOperation>? pushOperation = null)
     {
         var notebook = new Notebook(Guid.NewGuid(), "無題ノート");
         for (var i = 0; i < Math.Max(1, pageCount); i++)
@@ -41,7 +44,7 @@ public sealed class NotebookSession
             notebook.Pages.Add(new NotebookPage(i, widthPt, heightPt, background));
         }
 
-        return new NotebookSession(notebook);
+        return new NotebookSession(notebook, pushOperation);
     }
 
     public Notebook Notebook => _notebook;
@@ -136,5 +139,203 @@ public sealed class NotebookSession
     {
         Touch();
         return NotebookSerializer.ToFile(_notebook);
+    }
+
+    // ------------------------------------------------------------
+    // PDF オブジェクト操作 (段階5 ステップ2)。
+    // 変形はオブジェクトのデータのみを変更し、ストローク座標には一切触れない。
+    // すべての操作は ContentChanged (自動保存トリガー) を発火し、
+    // pushOperation (InkSession の操作履歴) に Undo 操作を積む。
+    // ------------------------------------------------------------
+
+    /// <summary>PdfObject 追加結果。ソフト上限超過などは無言で拒否せず呼び出し側に返す。</summary>
+    public enum PdfObjectAddStatus
+    {
+        Added,
+        PageIndexOutOfRange,
+        PageLimitReached,
+        UnknownResource,
+        InvalidTransform,
+    }
+
+    /// <summary>PdfObject 追加の明示的な結果。</summary>
+    public sealed class PdfObjectAddOutcome
+    {
+        public PdfObjectAddStatus Status { get; init; }
+
+        public PdfObject? Object { get; init; }
+
+        public static PdfObjectAddOutcome From(PdfObjectAddStatus status, PdfObject? obj = null) =>
+            new() { Status = status, Object = obj };
+    }
+
+    /// <summary>現在ページに PDF オブジェクトを追加する。</summary>
+    public PdfObjectAddOutcome AddPdfObject(
+        Guid resourceId,
+        int pdfPageIndex,
+        ObjectTransform transform,
+        Guid? objectId = null)
+    {
+        return AddPdfObject(_currentPage, resourceId, pdfPageIndex, transform, objectId);
+    }
+
+    /// <summary>
+    /// 指定ページに PDF オブジェクトを追加する (ページ番号は Notebook.Pages のリスト位置)。
+    /// ソフト上限 (<see cref="PageObjectLimits.MaxObjectsPerPage"/>) 超過時は
+    /// <see cref="PdfObjectAddStatus.PageLimitReached"/> を返す (呼び出し側が警告と続行可否を判断する)。
+    /// </summary>
+    public PdfObjectAddOutcome AddPdfObject(
+        int pageIndex,
+        Guid resourceId,
+        int pdfPageIndex,
+        ObjectTransform transform,
+        Guid? objectId = null)
+    {
+        var page = PageAt(pageIndex);
+        if (page is null)
+        {
+            return PdfObjectAddOutcome.From(PdfObjectAddStatus.PageIndexOutOfRange);
+        }
+
+        if (_notebook.Resources.All(r => r.Id != resourceId))
+        {
+            return PdfObjectAddOutcome.From(PdfObjectAddStatus.UnknownResource);
+        }
+
+        if (pdfPageIndex < 0)
+        {
+            return PdfObjectAddOutcome.From(PdfObjectAddStatus.PageIndexOutOfRange);
+        }
+
+        try
+        {
+            transform.Validate();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return PdfObjectAddOutcome.From(PdfObjectAddStatus.InvalidTransform);
+        }
+
+        if (page.Objects.Count >= PageObjectLimits.MaxObjectsPerPage)
+        {
+            return PdfObjectAddOutcome.From(PdfObjectAddStatus.PageLimitReached);
+        }
+
+        var pdfObject = new PdfObject(
+            objectId ?? Guid.NewGuid(),
+            resourceId,
+            pdfPageIndex,
+            transform.X, transform.Y, transform.WidthPt, transform.HeightPt,
+            transform.RotationDeg,
+            NextZ(page));
+        page.Objects.Add(pdfObject);
+        MarkObjectChanged(new AddPdfObjectOperation(_notebook, pageIndex, pdfObject));
+        return PdfObjectAddOutcome.From(PdfObjectAddStatus.Added, pdfObject);
+    }
+
+    /// <summary>オブジェクトを削除する (Undo 可能)。対象が無ければ false。</summary>
+    public bool TryRemovePdfObject(int pageIndex, Guid objectId)
+    {
+        var page = PageAt(pageIndex);
+        if (page is null)
+        {
+            return false;
+        }
+
+        var index = page.Objects.FindIndex(o => o.Id == objectId);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var removed = (PdfObject)page.Objects[index]; // 現状は PdfObject のみ (将来の種別は削除操作を拡張)。
+        page.Objects.RemoveAt(index);
+        MarkObjectChanged(new RemovePdfObjectOperation(_notebook, pageIndex, removed, index));
+        return true;
+    }
+
+    /// <summary>オブジェクトを変形する (移動 / 拡大縮小 / 回転)。不正値は適用前に例外 (部分適用なし)。</summary>
+    public bool TrySetObjectTransform(int pageIndex, Guid objectId, ObjectTransform transform)
+    {
+        transform.Validate();
+
+        var page = PageAt(pageIndex);
+        var obj = page?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        var before = ObjectTransform.Capture(obj);
+        if (before == transform)
+        {
+            return true; // 同値変更は履歴に積まない。
+        }
+
+        transform.ApplyTo(obj);
+        MarkObjectChanged(new TransformPdfObjectOperation(obj, before, transform));
+        return true;
+    }
+
+    /// <summary>Z 順序を変更する。</summary>
+    public bool TrySetObjectZ(int pageIndex, Guid objectId, int z)
+    {
+        var page = PageAt(pageIndex);
+        var obj = page?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        if (obj.Z == z)
+        {
+            return true;
+        }
+
+        var before = obj.Z;
+        obj.Z = z;
+        MarkObjectChanged(new SetObjectZOperation(obj, before, z));
+        return true;
+    }
+
+    /// <summary>Z 順 → リスト順で並べた描画順 (段階5 手順4 で使用)。</summary>
+    public IReadOnlyList<PageObject> GetObjectsInDrawOrder(int pageIndex)
+    {
+        var page = PageAt(pageIndex);
+        if (page is null || page.Objects.Count == 0)
+        {
+            return Array.Empty<PageObject>();
+        }
+
+        return page.Objects
+            .Select((obj, index) => (obj, index))
+            .OrderBy(t => t.obj.Z)
+            .ThenBy(t => t.index)
+            .Select(t => t.obj)
+            .ToList();
+    }
+
+    private NotebookPage? PageAt(int pageIndex) =>
+        (uint)pageIndex < (uint)_notebook.Pages.Count ? _notebook.Pages[pageIndex] : null;
+
+    private static int NextZ(NotebookPage page)
+    {
+        var max = -1;
+        foreach (var obj in page.Objects)
+        {
+            if (obj.Z > max)
+            {
+                max = obj.Z;
+            }
+        }
+
+        return max + 1;
+    }
+
+    private void MarkObjectChanged(IInkOperation operation)
+    {
+        Touch();
+        ContentChanged?.Invoke();
+        _pushOperation?.Invoke(operation);
     }
 }

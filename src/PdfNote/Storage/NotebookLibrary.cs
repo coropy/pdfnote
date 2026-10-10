@@ -246,4 +246,98 @@ public static class NotebookLibrary
 
         Directory.Delete(folderPath, recursive: true);
     }
+
+    // ------------------------------------------------------------
+    // PDF 資産の取り込み (段階5 ステップ2)。
+    // 元ファイルは読み取りのみで、変更 / 移動 / 削除は一切行わない。
+    // 実体は <notebookFolder>/assets/<リソース短ID>.pdf に 1 回だけコピーする。
+    // 指紋 (FileSize / LastWriteTimeUtc) は「変更検知」用であり、内容の同一性を保証しない。
+    // ------------------------------------------------------------
+
+    /// <summary>
+    /// PDF をノートの assets/ へコピーしてリソース登録情報を返す。
+    /// 保存名はリソース ID 由来のため、同名 PDF の再取り込みでも既存ファイルを上書きしない。
+    /// コピー後の検証 (存在 / サイズ一致) に失敗した場合は部分コピーを削除して例外を再スローする
+    /// (不完全なリソース登録は呼び出し側に残らない)。
+    /// </summary>
+    /// <param name="notebookFolder">ノートブックフォルダ。</param>
+    /// <param name="sourcePath">取り込む PDF のパス (読み取り専用)。</param>
+    /// <param name="kind">リソース種別 ("Pdf")。</param>
+    /// <param name="resourceId">リソース Id (テスト用。通常は null = 新規生成)。</param>
+    public static Resource AddResource(string notebookFolder, string sourcePath, string kind = "Pdf", Guid? resourceId = null)
+    {
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException($"取り込むファイルが見つかりません: {sourcePath}");
+        }
+
+        var id = resourceId ?? Guid.NewGuid();
+        var assetsDirectory = Path.Combine(notebookFolder, "assets");
+        Directory.CreateDirectory(assetsDirectory);
+
+        var baseName = $"{id.ToString("N")[..8]}.pdf";
+        var target = Path.Combine(assetsDirectory, baseName);
+        for (var i = 2; File.Exists(target); i++)
+        {
+            target = Path.Combine(assetsDirectory, $"{id.ToString("N")[..8]}-{i}.pdf");
+        }
+
+        try
+        {
+            File.Copy(sourcePath, target, overwrite: false);
+        }
+        catch
+        {
+            // 部分コピーが残らないようにする (失敗理由は呼び出し側へ通知)。
+            TryDeleteFile(target);
+            throw;
+        }
+
+        // コピー検証: 存在とサイズ一致。失敗時は不完全な資産を残さない。
+        var sourceInfo = new FileInfo(sourcePath);
+        var targetInfo = new FileInfo(target);
+        if (!targetInfo.Exists || targetInfo.Length != sourceInfo.Length)
+        {
+            TryDeleteFile(target);
+            throw new IOException($"PDF のコピー検証に失敗しました: {sourcePath} → {target}");
+        }
+
+        // FileName はノートフォルダ起点の相対パスのみを保存する (絶対パス / 一時パスは保存しない)。
+        return new Resource(
+            id,
+            kind,
+            Path.Combine("assets", Path.GetFileName(target)),
+            targetInfo.Length,
+            targetInfo.LastWriteTimeUtc);
+    }
+
+    /// <summary>
+    /// リソースの実体ファイルを解決する。相対パスはノートフォルダ基準。
+    /// ファイルが存在しない (参照切れ) 場合は null を返す (呼び出し側はプレースホルダ表示)。
+    /// </summary>
+    public static string? FindResourceFile(string notebookFolder, Resource resource)
+    {
+        if (string.IsNullOrWhiteSpace(resource.FileName) || Path.IsPathRooted(resource.FileName))
+        {
+            return null;
+        }
+
+        var fullPath = Path.Combine(notebookFolder, resource.FileName);
+        return File.Exists(fullPath) ? fullPath : null;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // 削除失敗は無視 (孤立ファイルは次回起動時に assets 掃除対象になり得るが、現状は放置)。
+        }
+    }
 }
