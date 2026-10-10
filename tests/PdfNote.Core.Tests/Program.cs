@@ -47,6 +47,8 @@ internal static class Program
         PdfObjectDrawTests.ContentRectAndRotation(Check);
         PdfObjectDrawTests.EffectiveScaleAndStaleness(Check);
         PdfObjectDrawTests.DrawDecision(Check);
+        PdfObjectDrawTests.TransformMatrixOrder(Check);
+        PdfObjectDrawTests.ViewportCulling(Check);
         PdfObjectDrawTests.TextureBudget(Check);
         PdfObjectDrawTests.TextureCacheCoreLru(Check);
 

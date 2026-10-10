@@ -396,7 +396,12 @@ public sealed class PdfCanvas : UserControl
         }
 
         // PDF オブジェクト層 (背景より前面、Ink より背面。ノートブックモードのみ)。
-        ObjectLayer?.Draw(session, pageTransform, _displayPxPerPt);
+        // ビューポート (ページpt座標) を渡し、画面外オブジェクトへの無制限要求を防ぐ。
+        var viewX = -_panOffset.X / (float)_displayPxPerPt;
+        var viewY = -_panOffset.Y / (float)_displayPxPerPt;
+        var viewW = _canvas.ActualSize.X / (float)_displayPxPerPt;
+        var viewH = _canvas.ActualSize.Y / (float)_displayPxPerPt;
+        ObjectLayer?.Draw(session, pageTransform, _displayPxPerPt, (viewX, viewY, viewW, viewH));
 
         // Ink Layer (背景/PDF テクスチャより前面の合成パス)。
         if (InkDrawing is not null && hasPage)

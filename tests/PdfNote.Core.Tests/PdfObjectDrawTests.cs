@@ -10,13 +10,16 @@ internal static class PdfObjectDrawTests
     internal static void ContentRectAndRotation(Action<bool, string> check)
     {
         Console.WriteLine("PdfObjectDraw_ContentRect");
-        var (cw, ch, center, rad) = PdfObjectMath.GetContentRect(10f, 20f, 200f, 100f, 0);
+        var (cw, ch, contentCenter, rad) = PdfObjectMath.GetContentRect(10f, 20f, 200f, 100f, 0);
         check(Math.Abs(cw - 200f) < 0.001 && Math.Abs(ch - 100f) < 0.001, "0° は内容=バウンディング");
-        check(Math.Abs(center.X - 110f) < 0.001 && Math.Abs(center.Y - 70f) < 0.001, "中心 = バウンディング中心");
+        check(Math.Abs(contentCenter.X - 100f) < 0.001 && Math.Abs(contentCenter.Y - 50f) < 0.001,
+            "0° の内容中心 = 内容矩形の中心 (バウンディング中心と一致)");
         check(Math.Abs(rad) < 0.001, "0° の回転角");
 
-        (cw, ch, _, rad) = PdfObjectMath.GetContentRect(10f, 20f, 200f, 100f, 90);
+        (cw, ch, contentCenter, rad) = PdfObjectMath.GetContentRect(10f, 20f, 200f, 100f, 90);
         check(Math.Abs(cw - 100f) < 0.001 && Math.Abs(ch - 200f) < 0.001, "90° は内容矩形が入替");
+        check(Math.Abs(contentCenter.X - 50f) < 0.001 && Math.Abs(contentCenter.Y - 100f) < 0.001,
+            "90° の内容中心 (内容矩形基準。バウンディング中心とは異なる)");
         check(Math.Abs(rad - MathF.PI / 2f) < 0.001, "90° の回転角");
 
         (cw, ch, _, _) = PdfObjectMath.GetContentRect(0f, 0f, 200f, 100f, 270);
@@ -62,6 +65,66 @@ internal static class PdfObjectDrawTests
             PdfObjectDrawAction.RequestTexture, "初回は要求");
     }
 
+    internal static void TransformMatrixOrder(Action<bool, string> check)
+    {
+        Console.WriteLine("PdfObjectDraw_TransformMatrixOrder");
+        // オブジェクト: X=100, Y=50, W=200, H=100 (バウンディング)。テクスチャ 2px/pt。
+        var pageTransform = Matrix3x2.CreateScale(2f) * Matrix3x2.CreateTranslation(30f, 40f);
+        var (cw, ch, contentCenter, rad) = PdfObjectMath.GetContentRect(100f, 50f, 200f, 100f, 0);
+        var boundingCenter = new Vector2(100f + 200f / 2f, 50f + 100f / 2f);
+
+        var transform = PdfObjectMath.CreateObjectTransform(
+            2.0, cw, ch, 200f, 100f, boundingCenter, rad, pageTransform);
+
+        // ビットマップ左上 (0,0) → ページ (X, Y) → 画面 (X*2+30, Y*2+40)。
+        var topLeft = Vector2.Transform(Vector2.Zero, transform);
+        check(Math.Abs(topLeft.X - (100f * 2f + 30f)) < 0.01 &&
+              Math.Abs(topLeft.Y - (50f * 2f + 40f)) < 0.01, "平行移動 / 拡大の適用順序 (0°)");
+
+        // ビットマップ右下 (pdfW*2, pdfH*2) → ページ (X+W, Y+H)。
+        var bottomRight = Vector2.Transform(new Vector2(200f * 2f, 100f * 2f), transform);
+        check(Math.Abs(bottomRight.X - ((100f + 200f) * 2f + 30f)) < 0.01 &&
+              Math.Abs(bottomRight.Y - ((50f + 100f) * 2f + 40f)) < 0.01, "右下角の対応 (トリミングなしで全域)");
+
+        // 90° 回転: 内容矩形 (100, 200) を内容中心で回し、バウンディング中心に配置すると、
+        // ビットマップ4隅 (px: 0..pdfW*tex, 0..pdfH*tex) の変換結果がバウンディング矩形 (100..300, 50..150) に一致する。
+        (cw, ch, contentCenter, rad) = PdfObjectMath.GetContentRect(100f, 50f, 200f, 100f, 90);
+        transform = PdfObjectMath.CreateObjectTransform(
+            2.0, cw, ch, 200f, 100f, boundingCenter, rad, Matrix3x2.Identity);
+        var pixelCorners = new[]
+        {
+            Vector2.Transform(Vector2.Zero, transform),
+            Vector2.Transform(new Vector2(200f * 2f, 0f), transform),
+            Vector2.Transform(new Vector2(0f, 100f * 2f), transform),
+            Vector2.Transform(new Vector2(200f * 2f, 100f * 2f), transform),
+        };
+        var minX = pixelCorners.Min(c => c.X); var maxX = pixelCorners.Max(c => c.X);
+        var minY = pixelCorners.Min(c => c.Y); var maxY = pixelCorners.Max(c => c.Y);
+        check(Math.Abs(minX - 100f) < 0.01 && Math.Abs(maxX - 300f) < 0.01 &&
+              Math.Abs(minY - 50f) < 0.01 && Math.Abs(maxY - 150f) < 0.01,
+            "90° 回転の4隅はバウンディング矩形に一致 (内容中心回転 → バウンディング中心配置)");
+
+        // 回転後、内容中心 (px) はバウンディング中心に一致する。
+        var rotatedContentCenter = Vector2.Transform(
+            new Vector2(200f * 2f / 2f, 100f * 2f / 2f), transform);
+        check(Math.Abs(rotatedContentCenter.X - boundingCenter.X) < 0.01 &&
+              Math.Abs(rotatedContentCenter.Y - boundingCenter.Y) < 0.01, "内容中心 → バウンディング中心");
+    }
+
+    internal static void ViewportCulling(Action<bool, string> check)
+    {
+        Console.WriteLine("PdfObjectDraw_ViewportCulling");
+        // ビューポート: ページ座標 (0,0)-(595, 842)。
+        check(PdfObjectMath.IntersectsViewport(500, 800, 200, 100, 0, 0, 595, 842, 64),
+            "ビューポート端と重なるオブジェクトは可視");
+        check(!PdfObjectMath.IntersectsViewport(700, 0, 200, 100, 0, 0, 595, 842, 64),
+            "完全に画面外のオブジェクトは不可視");
+        check(PdfObjectMath.IntersectsViewport(640, 0, 200, 100, 0, 0, 595, 842, 64),
+            "マージン (64pt) 内のオブジェクトは可視");
+        check(!PdfObjectMath.IntersectsViewport(700, 0, 200, 100, 0, 0, 595, 842, 0),
+            "マージンなしでは不可視");
+    }
+
     internal static void TextureBudget(Action<bool, string> check)
     {
         Console.WriteLine("PdfObjectDraw_TextureBudget");
@@ -101,10 +164,14 @@ internal static class PdfObjectDrawTests
         core.Remove("k7");
         check(!core.TryGet("k7", out _) && core.Stats.Count >= 1, "Remove で参照解除");
 
-        // キャッシュキーの同一性 (リソース / ページ / 解像度)。
-        var keyA = new PdfObjectTextureKey(Guid.NewGuid(), 0, 2.0);
+        // キャッシュキーの同一性 (オブジェクト / リソース / ページ / 解像度)。
+        var objectId = Guid.NewGuid();
+        var resourceId = Guid.NewGuid();
+        var keyA = new PdfObjectTextureKey(objectId, resourceId, 0, 2.0);
         var keyB = keyA with { PxPerPt = 2.5 };
         var keyC = keyA with { PdfPageIndex = 1 };
-        check(!keyA.Equals(keyB) && !keyA.Equals(keyC) && keyA.Equals(keyA with { }), "キーは解像度・ページを含む");
+        var keyD = keyA with { ObjectId = Guid.NewGuid() };
+        check(!keyA.Equals(keyB) && !keyA.Equals(keyC) && !keyA.Equals(keyD) && keyA.Equals(keyA with { }),
+            "キーはオブジェクト・解像度・ページを含む");
     }
 }

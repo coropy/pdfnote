@@ -4,8 +4,13 @@ using PdfNote.Core;
 
 namespace PdfNote.View;
 
-/// <summary>PDF オブジェクト GPU テクスチャのキー (同一性判定に必要な値すべてを含む)。</summary>
-public readonly record struct PdfObjectTextureKey(Guid ResourceId, int PdfPageIndex, double PxPerPt);
+/// <summary>
+/// PDF オブジェクト GPU テクスチャのキー (同一性判定に必要な値すべてを含む)。
+/// オブジェクト ID を含むため、同じリソース+ページでもオブジェクトごとに独立したテクスチャを持つ
+/// (CPU レンダリング要求はサービス側で資源+ページ単位に統合されるため、GPU アップロードのみが複製される)。
+/// </summary>
+public readonly record struct PdfObjectTextureKey(
+    Guid ObjectId, Guid ResourceId, int PdfPageIndex, double PxPerPt);
 
 /// <summary>
 /// PDF オブジェクト描画の純粋計算 (Win2D 非依存・テスト可能)。
@@ -21,10 +26,11 @@ public static class PdfObjectMath
 
     /// <summary>
     /// オブジェクト配置から「テクスチャ内容の矩形」を求める。
-    /// X/Y/WidthPt/HeightPt は回転後のバウンディング矩形 (ページ座標)、
-    /// 回転はその中心基準。90/270 度では内容矩形の幅と高さが入れ替わる。
+    /// X/Y/WidthPt/HeightPt は回転後のバウンディング矩形 (ページ座標)。
+    /// 90/270 度では内容矩形の幅と高さが入れ替わり、内容中心とバウンディング中心は一致しない
+    /// (CreateObjectTransform が両者を正しく接続する)。
     /// </summary>
-    public static (float ContentWidthPt, float ContentHeightPt, Vector2 Center, float RotationRadians)
+    public static (float ContentWidthPt, float ContentHeightPt, Vector2 ContentCenter, float RotationRadians)
         GetContentRect(float x, float y, float widthPt, float heightPt, int rotationDeg)
     {
         if (!PageObjectLimits.IsAllowedRotation(rotationDeg))
@@ -32,7 +38,6 @@ public static class PdfObjectMath
             throw new ArgumentOutOfRangeException(nameof(rotationDeg), "回転角は 0/90/180/270 のいずれかである必要があります。");
         }
 
-        var center = new Vector2(x + widthPt / 2f, y + heightPt / 2f);
         var radians = rotationDeg switch
         {
             90 => MathF.PI / 2f,
@@ -41,7 +46,9 @@ public static class PdfObjectMath
             _ => 0f,
         };
         var swap = rotationDeg is 90 or 270;
-        return (swap ? heightPt : widthPt, swap ? widthPt : heightPt, center, radians);
+        var contentWidth = swap ? heightPt : widthPt;
+        var contentHeight = swap ? widthPt : heightPt;
+        return (contentWidth, contentHeight, new Vector2(contentWidth / 2f, contentHeight / 2f), radians);
     }
 
     /// <summary>
@@ -81,6 +88,41 @@ public static class PdfObjectMath
     /// <summary>16Mpx テクスチャ上限の超過判定 (RenderScale の規約に従う)。</summary>
     public static bool ExceedsTextureBudget(int pixelWidth, int pixelHeight) =>
         (long)pixelWidth * pixelHeight > RenderScale.MaxRenderPixels;
+
+    /// <summary>
+    /// オブジェクト描画の変換行列を構築する (Win2D と同じ行ベクトル規約: A * B は A を先に適用)。
+    /// ビットマップ px → PDF pt → 内容矩形 (伸縮) → 内容中心基準の回転 → バウンディング中心へ配置 → ページ → 画面。
+    /// PDF はオブジェクトの表示領域に合わせて伸縮する (トリミングなし。縦横比はオブジェクト寸法が定義)。
+    /// </summary>
+    public static Matrix3x2 CreateObjectTransform(
+        double texPxPerPt,
+        float contentWidthPt, float contentHeightPt,
+        float pdfPageWidthPt, float pdfPageHeightPt,
+        Vector2 boundingCenter, float rotationRadians,
+        Matrix3x2 pageTransform)
+    {
+        // px → 内容 pt: (内容寸法 / (PDF 寸法 × texScale))。texScale は px / PDF pt。
+        var sx = (float)(contentWidthPt / Math.Max(pdfPageWidthPt * texPxPerPt, 0.0001));
+        var sy = (float)(contentHeightPt / Math.Max(pdfPageHeightPt * texPxPerPt, 0.0001));
+        return Matrix3x2.CreateScale(sx, sy)
+               * Matrix3x2.CreateTranslation(-contentWidthPt / 2f, -contentHeightPt / 2f)
+               * Matrix3x2.CreateRotation(rotationRadians)
+               * Matrix3x2.CreateTranslation(boundingCenter.X, boundingCenter.Y)
+               * pageTransform;
+    }
+
+    /// <summary>オブジェクト矩形がビューポート (ページpt座標) と交わるか (マージン付き)。画面外への無制限要求を防ぐ。</summary>
+    public static bool IntersectsViewport(
+        double objX, double objY, double objWidth, double objHeight,
+        double viewX, double viewY, double viewWidth, double viewHeight,
+        double marginPt)
+    {
+        var margin = Math.Max(marginPt, 0);
+        return objX - margin < viewX + viewWidth &&
+               objX + objWidth + margin > viewX &&
+               objY - margin < viewY + viewHeight &&
+               objY + objHeight + margin > viewY;
+    }
 }
 
 /// <summary>描画時の判断 (純粋関数・テスト可能)。</summary>

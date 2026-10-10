@@ -36,13 +36,19 @@ public sealed class PdfObjectLayer
     private readonly PdfObjectTextureCache _textures = new();
     private readonly Dictionary<Guid, ResourceState> _resourceStates = new();
 
-    /// <summary>(リソース, PDFページ) → 飛行中の要求。null は寸法取得中の予約。</summary>
-    private readonly Dictionary<(Guid ResourceId, int PdfPageIndex), PdfObjectRenderRequest?> _pending = new();
+    /// <summary>オブジェクト → 飛行中の要求。null は寸法取得中の予約。</summary>
+    private readonly Dictionary<Guid, PdfObjectRenderRequest?> _pending = new();
 
-    /// <summary>(リソース, PDFページ) → オブジェクトごとに採用すべき最新 RequestId。</summary>
-    private readonly Dictionary<(Guid ResourceId, int PdfPageIndex), long> _latestRequestId = new();
+    /// <summary>オブジェクト → 採用すべき最新 RequestId (古い完了結果の破棄判定用)。</summary>
+    private readonly Dictionary<Guid, long> _latestRequestId = new();
 
     private readonly Action _invalidate;
+
+    /// <summary>最新要求と不一致で破棄した古い結果の累計 (F9 計測用)。</summary>
+    public long StaleDiscardedCount { get; private set; }
+
+    /// <summary>現在、陳腐化テクスチャを拡縮表示しているか (暫定画質の内部区別。ズーム確定で解消)。</summary>
+    public bool DisplayingStale { get; private set; }
 
     private NotebookSession? _session;
     private Action? _contentChangedSubscription;
@@ -65,6 +71,13 @@ public sealed class PdfObjectLayer
 
         /// <summary>ページレンダ失敗の再試行時刻。</summary>
         public readonly Dictionary<int, DateTime> PageRetryAfterUtc = new();
+
+        /// <summary>開いた後に実ページ数範囲外だったオブジェクト数 (削除せず警告付きプレースホルダで保持)。</summary>
+        public int InvalidObjectCount;
+
+        /// <summary>警告ログを 1 回だけ出すためのフラグ (毎フレーム大量出力の防止)。</summary>
+        public bool LoggedOpenFailure;
+        public bool WarnedInvalidObjects;
     }
 
     public PdfObjectLayer(PdfResourceRenderService service, DispatcherQueue dispatcher, Action invalidate)
@@ -123,6 +136,9 @@ public sealed class PdfObjectLayer
     /// <summary>Draw で観測した最新の表示スケール (再レンダリング要求の計算用)。</summary>
     private double _lastDisplayPxPerPt = RenderScale.DefaultPxPerPt;
 
+    /// <summary>Draw で観測した最新のビューポート (ページpt座標)。画面外への無制限要求を防ぐ。</summary>
+    private (double X, double Y, double Width, double Height) _lastViewport;
+
     /// <summary>
     /// モデル変更後の再描画と、必要な場合のみの再レンダリング要求。
     /// ペンストロークの追加では PDF は陳腐化しないため、要求は dedupe されて発火しない。
@@ -144,23 +160,83 @@ public sealed class PdfObjectLayer
 
         foreach (var obj in session.GetObjectsInDrawOrder(page))
         {
-            if (obj is PdfObject pdf)
+            if (obj is not PdfObject pdf)
             {
-                var decision = Evaluate(pdf, _lastDisplayPxPerPt, out _, out _, out _, out var state);
-                if (decision is PdfObjectDrawAction.RequestTexture or PdfObjectDrawAction.ReuseStaleTexture)
+                continue;
+            }
+
+            // 画面外は要求しない (スクロールで視界に入った時点で Draw が要求する)。
+            if (!IsVisible(pdf))
+            {
+                continue;
+            }
+
+            var decision = Evaluate(pdf, _lastDisplayPxPerPt, out _, out var content, out _, out var state);
+            if (decision is PdfObjectDrawAction.RequestTexture or PdfObjectDrawAction.ReuseStaleTexture)
+            {
+                BeginRender(state!, pdf, content, _lastDisplayPxPerPt);
+            }
+        }
+    }
+
+    private bool IsVisible(PdfObject pdf)
+    {
+        var v = _lastViewport;
+        return PdfObjectMath.IntersectsViewport(
+            pdf.X, pdf.Y, pdf.WidthPt, pdf.HeightPt, v.X, v.Y, v.Width, v.Height, marginPt: 64);
+    }
+
+    /// <summary>現在ページの PDF オブジェクト数 (F9 計測用)。</summary>
+    public int ObjectCountOnCurrentPage
+    {
+        get
+        {
+            var session = _session;
+            if (session is null)
+            {
+                return 0;
+            }
+
+            var page = session.CurrentPage;
+            if ((uint)page >= (uint)session.PageCount)
+            {
+                return 0;
+            }
+
+            return session.GetObjectsInDrawOrder(page).Count;
+        }
+    }
+
+    /// <summary>保留中のレンダリング要求数 (F9 計測用)。</summary>
+    public int PendingCount
+    {
+        get
+        {
+            lock (_pending)
+            {
+                var count = 0;
+                foreach (var pending in _pending.Values)
                 {
-                    var content = PdfObjectMath.GetContentRect(
-                        pdf.X, pdf.Y, pdf.WidthPt, pdf.HeightPt, pdf.RotationDeg);
-                    BeginRender(state!, pdf, content, _lastDisplayPxPerPt);
+                    if (pending is not null)
+                    {
+                        count++;
+                    }
                 }
+
+                return count;
             }
         }
     }
 
     /// <summary>PdfCanvas.OnDraw から呼ばれる (背景の後、Ink の前)。</summary>
-    public void Draw(CanvasDrawingSession session, Matrix3x2 pageTransform, double displayPxPerPt)
+    /// <param name="visiblePageRect">ビューポートのページpt座標 (X, Y, Width, Height)。画面外への要求を防ぐ。</param>
+    public void Draw(
+        CanvasDrawingSession session, Matrix3x2 pageTransform, double displayPxPerPt,
+        (double X, double Y, double Width, double Height) visiblePageRect)
     {
         _lastDisplayPxPerPt = displayPxPerPt;
+        _lastViewport = visiblePageRect;
+        DisplayingStale = false;
         var s = _session;
         if (s is null)
         {
@@ -176,6 +252,12 @@ public sealed class PdfObjectLayer
         foreach (var obj in s.GetObjectsInDrawOrder(page))
         {
             if (obj is not PdfObject pdf)
+            {
+                continue;
+            }
+
+            // 画面外は描画も要求もしない (スクロールで視界に入った時点で処理される)。
+            if (!IsVisible(pdf))
             {
                 continue;
             }
@@ -200,19 +282,19 @@ public sealed class PdfObjectLayer
     private void DrawObject(
         CanvasDrawingSession session, Matrix3x2 pageTransform, double displayPxPerPt, PdfObject pdf)
     {
-        var decision = Evaluate(pdf, displayPxPerPt, out var texture, out var content, out var required, out var state);
+        var decision = Evaluate(pdf, displayPxPerPt, out var texture, out var content, out var pdfDims, out var state);
 
         switch (decision)
         {
             case PdfObjectDrawAction.DrawTexture:
-            case PdfObjectDrawAction.ReuseStaleTexture:
-                // 旧テクスチャを拡縮表示して空白化を避ける (完了後に新テクスチャへ切替)。
-                DrawTexture(session, pageTransform, texture!.Value.Bitmap, texture.Value.Key.PxPerPt, content);
-                if (decision == PdfObjectDrawAction.ReuseStaleTexture)
-                {
-                    BeginRender(state!, pdf, content, displayPxPerPt);
-                }
+                DrawTexture(session, pageTransform, texture!.Value.Bitmap, texture.Value.Key.PxPerPt, content, pdfDims, pdf);
+                break;
 
+            case PdfObjectDrawAction.ReuseStaleTexture:
+                // ズーム中は旧テクスチャを拡縮表示して空白化を避ける。
+                // 再レンダリング要求はズーム確定 (OnZoomSettled → OnContentChanged) で出す。
+                DisplayingStale = true;
+                DrawTexture(session, pageTransform, texture!.Value.Bitmap, texture.Value.Key.PxPerPt, content, pdfDims, pdf);
                 break;
 
             case PdfObjectDrawAction.RequestTexture:
@@ -243,13 +325,13 @@ public sealed class PdfObjectLayer
         PdfObject pdf,
         double displayPxPerPt,
         out (CanvasBitmap Bitmap, PdfObjectTextureKey Key)? texture,
-        out (float ContentWidthPt, float ContentHeightPt, Vector2 Center, float RotationRadians) content,
-        out double required,
+        out (float ContentWidthPt, float ContentHeightPt, Vector2 ContentCenter, float RotationRadians) content,
+        out (float PdfPageWidthPt, float PdfPageHeightPt) pdfDims,
         out ResourceState? state)
     {
         texture = null;
         content = default;
-        required = 0;
+        pdfDims = default;
         state = GetResourceState(pdf.ResourceId);
 
         if (state.Missing || state.OpenFailed)
@@ -266,6 +348,7 @@ public sealed class PdfObjectLayer
 
         bool outOfRange;
         bool dimsKnown;
+        double pendingRequired = 0;
         lock (state.Gate)
         {
             outOfRange = (uint)pdf.PdfPageIndex >= (uint)state.PageCount ||
@@ -274,8 +357,11 @@ public sealed class PdfObjectLayer
             dimsKnown = state.Dims.TryGetValue(pdf.PdfPageIndex, out var dims);
             if (dimsKnown)
             {
-                required = PdfObjectMath.EffectivePxPerPt(
+                pdfDims = ((float)dims.WidthPt, (float)dims.HeightPt);
+                var required = PdfObjectMath.EffectivePxPerPt(
                     displayPxPerPt, content.ContentWidthPt, content.ContentHeightPt, dims.WidthPt, dims.HeightPt);
+                // required はローカルで pending 判定に使用。
+                pendingRequired = required;
             }
         }
 
@@ -284,14 +370,15 @@ public sealed class PdfObjectLayer
             return PdfObjectDrawAction.PageOutOfRange;
         }
 
-        var hasTexture = _textures.TryGetAny(pdf.ResourceId, pdf.PdfPageIndex, out var bitmap, out var texKey);
-        var usable = dimsKnown && hasTexture && PdfObjectMath.IsTextureUsable(texKey.PxPerPt, required);
+        var hasTexture = _textures.TryGetAny(pdf.Id, out var bitmap, out var texKey);
+        var usable = dimsKnown && hasTexture && PdfObjectMath.IsTextureUsable(texKey.PxPerPt, pendingRequired);
         var pendingSameScale = false;
         var pendingOtherScale = false;
-        var pendingKey = (pdf.ResourceId, pdf.PdfPageIndex);
+        var pendingKey = pdf.Id;
         if (_pending.TryGetValue(pendingKey, out var pendingRequest))
         {
-            if (pendingRequest is null || Math.Abs(pendingRequest.RequestedPxPerPt / Math.Max(required, 0.0001) - 1.0) < 0.02)
+            if (pendingRequest is null || pendingRequired <= 0 ||
+                Math.Abs(pendingRequest.RequestedPxPerPt / Math.Max(pendingRequired, 0.0001) - 1.0) < 0.02)
             {
                 pendingSameScale = true;
             }
@@ -318,15 +405,18 @@ public sealed class PdfObjectLayer
     private static void DrawTexture(
         CanvasDrawingSession session, Matrix3x2 pageTransform, CanvasBitmap bitmap,
         double texPxPerPt,
-        (float ContentWidthPt, float ContentHeightPt, Vector2 Center, float RotationRadians) content)
+        (float ContentWidthPt, float ContentHeightPt, Vector2 ContentCenter, float RotationRadians) content,
+        (float PdfPageWidthPt, float PdfPageHeightPt) pdfDims,
+        PdfObject pdf)
     {
-        // ビットマップ px → PDF pt → オブジェクト内容矩形 (伸縮) → 回転 (中心基準) → ページ → 画面。
-        var sx = (float)(content.ContentWidthPt / Math.Max(texPxPerPt, 0.0001));
-        var sy = (float)(content.ContentHeightPt / Math.Max(texPxPerPt, 0.0001));
+        // バウンディング中心 (90/270 度では内容中心と異なる)。
+        var boundingCenter = new Vector2(pdf.X + pdf.WidthPt / 2f, pdf.Y + pdf.HeightPt / 2f);
         var previous = session.Transform;
-        session.Transform = Matrix3x2.CreateScale(sx, sy)
-                            * Matrix3x2.CreateRotation(content.RotationRadians, content.Center)
-                            * pageTransform;
+        session.Transform = PdfObjectMath.CreateObjectTransform(
+            texPxPerPt,
+            content.ContentWidthPt, content.ContentHeightPt,
+            pdfDims.PdfPageWidthPt, pdfDims.PdfPageHeightPt,
+            boundingCenter, content.RotationRadians, pageTransform);
         session.DrawImage(bitmap);
         session.Transform = previous;
     }
@@ -390,12 +480,40 @@ public sealed class PdfObjectLayer
                     state.PageCount = _service.TryGetPageCount(resourceId) ?? 0;
                     state.PageCountKnown = true;
                     state.OpenInProgress = false;
+
+                    // 実ページ数による既存オブジェクトの検証 (削除せず、警告付きプレースホルダとして保持)。
+                    var invalid = 0;
+                    var session = _session;
+                    if (session is not null)
+                    {
+                        foreach (var nbPage in session.Notebook.Pages)
+                        {
+                            foreach (var obj in nbPage.Objects)
+                            {
+                                if (obj is PdfObject p && p.ResourceId == resourceId &&
+                                    ((uint)p.PdfPageIndex >= (uint)state.PageCount || p.PdfPageIndex < 0))
+                                {
+                                    invalid++;
+                                }
+                            }
+                        }
+                    }
+
+                    state.InvalidObjectCount = invalid;
+                    if (invalid > 0 && !state.WarnedInvalidObjects)
+                    {
+                        state.WarnedInvalidObjects = true;
+                        App.LogError(
+                            $"PDF リソース {resourceId} のページ番号が実ページ数 ({state.PageCount}) の範囲外です ({invalid} 件。プレースホルダで保持します)。", null);
+                    }
+
                     _invalidate();
                 });
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // 破損 / アクセス拒否など。クラッシュさせずプレースホルダ + 再試行。
+                // ログは状態変化時に 1 回だけ (毎フレーム大量出力の防止)。
                 _dispatcher.TryEnqueue(() =>
                 {
                     if (generation != _generation)
@@ -406,6 +524,12 @@ public sealed class PdfObjectLayer
                     state.OpenFailed = true;
                     state.OpenInProgress = false;
                     state.RetryAfterUtc = DateTime.UtcNow + RetryDelay;
+                    if (!state.LoggedOpenFailure)
+                    {
+                        state.LoggedOpenFailure = true;
+                        App.LogError($"PDF リソース {resourceId} を開けませんでした (プレースホルダ表示に切り替えます)。", ex);
+                    }
+
                     _invalidate();
                 });
             }
@@ -420,7 +544,7 @@ public sealed class PdfObjectLayer
         (float ContentWidthPt, float ContentHeightPt, Vector2 Center, float RotationRadians) content,
         double displayPxPerPt)
     {
-        var pendingKey = (pdf.ResourceId, pdf.PdfPageIndex);
+        var pendingKey = pdf.Id;
         if (_pending.TryGetValue(pendingKey, out var existing))
         {
             if (existing is null)
@@ -445,7 +569,7 @@ public sealed class PdfObjectLayer
     private async System.Threading.Tasks.Task RunRenderAsync(
         ResourceState state, PdfObject pdf,
         (float ContentWidthPt, float ContentHeightPt, Vector2 Center, float RotationRadians) content,
-        double displayPxPerPt, (Guid ResourceId, int PdfPageIndex) pendingKey, int generation)
+        double displayPxPerPt, Guid objectId, int generation)
     {
         try
         {
@@ -460,25 +584,25 @@ public sealed class PdfObjectLayer
             var pageCount = _service.TryGetPageCount(pdf.ResourceId);
             if (pageCount is null || (uint)pdf.PdfPageIndex >= (uint)pageCount)
             {
-                _pending.Remove(pendingKey);
+                _pending.Remove(objectId);
                 return;
             }
 
             var required = PdfObjectMath.EffectivePxPerPt(
                 displayPxPerPt, content.ContentWidthPt, content.ContentHeightPt, dims.WidthPt, dims.HeightPt);
             var request = _service.Render(pdf.ResourceId, pdf.PdfPageIndex, required);
-            _pending[pendingKey] = request;
-            _latestRequestId[pendingKey] = request.RequestId;
+            _pending[objectId] = request;
+            _latestRequestId[objectId] = request.RequestId;
 
             var requestId = request.RequestId;
             _ = request.Task.ContinueWith(
-                t => OnRenderTaskCompleted(generation, pendingKey, requestId, t),
+                t => OnRenderTaskCompleted(generation, pdf, requestId, t),
                 System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously);
         }
         catch (Exception)
         {
             // 寸法取得 / 要求発行の失敗。クラッシュさせず再試行時刻を設定。
-            _pending.Remove(pendingKey);
+            _pending.Remove(objectId);
             if (generation == _generation)
             {
                 lock (state.Gate)
@@ -528,26 +652,37 @@ public sealed class PdfObjectLayer
     }
 
     private void OnRenderTaskCompleted(
-        int generation, (Guid ResourceId, int PdfPageIndex) pendingKey, long requestId,
+        int generation, PdfObject pdf, long requestId,
         System.Threading.Tasks.Task<PdfObjectRenderResult> task)
     {
         // RequestId 照合: 古い (キャンセル対応前に完了した) 結果は破棄する。
         // ノート切替後 (generation 不一致) の結果も反映しない。
-        var latestMatches = _latestRequestId.TryGetValue(pendingKey, out var latest) && latest == requestId;
-        if (generation != _generation || !latestMatches)
+        var latestMatches = _latestRequestId.TryGetValue(pdf.Id, out var latest) && latest == requestId;
+        if (generation != _generation)
         {
+            return; // ノート切替 (破棄カウント対象外)。
+        }
+
+        if (!latestMatches)
+        {
+            StaleDiscardedCount++;
             return;
         }
 
         _dispatcher.TryEnqueue(() =>
         {
-            if (generation != _generation ||
-                !_latestRequestId.TryGetValue(pendingKey, out var latestNow) || latestNow != requestId)
+            if (generation != _generation)
             {
-                return; // ページ / ノート切替 / より新しい要求が到着済み。
+                return;
             }
 
-            _pending.Remove(pendingKey);
+            if (!_latestRequestId.TryGetValue(pdf.Id, out var latestNow) || latestNow != requestId)
+            {
+                StaleDiscardedCount++; // ページ切替 / より新しい要求が到着済み。
+                return;
+            }
+
+            _pending.Remove(pdf.Id);
 
             if (task.Status == System.Threading.Tasks.TaskStatus.RanToCompletion)
             {
@@ -563,7 +698,7 @@ public sealed class PdfObjectLayer
                         96f,
                         CanvasAlphaMode.Ignore);
                     foreach (var (_, evicted) in _textures.Add(
-                        new PdfObjectTextureKey(pendingKey.ResourceId, pendingKey.PdfPageIndex, task.Result.PxPerPt),
+                        new PdfObjectTextureKey(pdf.Id, pdf.ResourceId, pdf.PdfPageIndex, task.Result.PxPerPt),
                         bitmap, frame.PixelWidth, frame.PixelHeight))
                     {
                         evicted.Dispose(); // 退避テクスチャは即解放 (UI スレッド)。
@@ -572,12 +707,12 @@ public sealed class PdfObjectLayer
             }
             else if (task.Status == System.Threading.Tasks.TaskStatus.Faulted)
             {
-                var state = _resourceStates.TryGetValue(pendingKey.ResourceId, out var found) ? found : null;
+                var state = _resourceStates.TryGetValue(pdf.ResourceId, out var found) ? found : null;
                 if (state is not null)
                 {
                     lock (state.Gate)
                     {
-                        state.PageRetryAfterUtc[pendingKey.PdfPageIndex] = DateTime.UtcNow + RetryDelay;
+                        state.PageRetryAfterUtc[pdf.PdfPageIndex] = DateTime.UtcNow + RetryDelay;
                     }
                 }
             }

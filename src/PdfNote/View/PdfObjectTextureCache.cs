@@ -22,15 +22,15 @@ public sealed class PdfObjectTextureCache
 
     private readonly TextureCacheCore<PdfObjectTextureKey> _core = new(Capacity, MaxTotalBytes);
 
-    /// <summary>(リソース, PDFページ) → 現在キャッシュ済みのキー (任意解像度での再利用用)。</summary>
-    private readonly Dictionary<(Guid ResourceId, int PdfPageIndex), PdfObjectTextureKey> _latest = new();
+    /// <summary>(オブジェクト) → 現在キャッシュ済みのキー (任意解像度での再利用用)。</summary>
+    private readonly Dictionary<Guid, PdfObjectTextureKey> _latest = new();
 
-    /// <summary>任意解像度のテクスチャを取得する (ズーム中の旧テクスチャ表示用)。</summary>
-    public bool TryGetAny(Guid resourceId, int pdfPageIndex, out CanvasBitmap bitmap, out PdfObjectTextureKey key)
+    /// <summary>任意解像度のテクスチャを取得する (ズーム中の旧テクスチャ表示用)。キーはオブジェクト単位。</summary>
+    public bool TryGetAny(Guid objectId, out CanvasBitmap bitmap, out PdfObjectTextureKey key)
     {
         lock (_latest)
         {
-            if (_latest.TryGetValue((resourceId, pdfPageIndex), out var found) && _core.TryGet(found, out var entry))
+            if (_latest.TryGetValue(objectId, out var found) && _core.TryGet(found, out var entry))
             {
                 bitmap = (CanvasBitmap)entry;
                 key = found;
@@ -75,7 +75,7 @@ public sealed class PdfObjectTextureCache
         _core.Add(key, bitmap, PdfObjectMath.EstimateFrameBytes(pixelWidth, pixelHeight), evictedKeys);
         lock (_latest)
         {
-            _latest[(key.ResourceId, key.PdfPageIndex)] = key;
+            _latest[key.ObjectId] = key;
         }
 
         foreach (var evictedKey in evictedKeys)
@@ -87,10 +87,9 @@ public sealed class PdfObjectTextureCache
 
             lock (_latest)
             {
-                if (_latest.TryGetValue((evictedKey.ResourceId, evictedKey.PdfPageIndex), out var mapped) &&
-                    mapped.Equals(evictedKey))
+                if (_latest.TryGetValue(evictedKey.ObjectId, out var mapped) && mapped.Equals(evictedKey))
                 {
-                    _latest.Remove((evictedKey.ResourceId, evictedKey.PdfPageIndex));
+                    _latest.Remove(evictedKey.ObjectId);
                 }
             }
         }
@@ -106,9 +105,9 @@ public sealed class PdfObjectTextureCache
             removed = (CanvasBitmap)entry;
             lock (_latest)
             {
-                if (_latest.TryGetValue((key.ResourceId, key.PdfPageIndex), out var mapped) && mapped.Equals(key))
+                if (_latest.TryGetValue(key.ObjectId, out var mapped) && mapped.Equals(key))
                 {
-                    _latest.Remove((key.ResourceId, key.PdfPageIndex));
+                    _latest.Remove(key.ObjectId);
                 }
             }
 

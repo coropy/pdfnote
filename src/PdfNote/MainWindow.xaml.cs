@@ -120,8 +120,15 @@ public sealed partial class MainWindow : Window
             var noteInfo = _autoSave.LastNoteBytes >= 0
                 ? $"\nNote {_autoSave.LastNoteBytes / 1024.0:F0} KB (save {_autoSave.LastSaveMs:F0} ms)"
                 : string.Empty;
+            var layer = _objectLayer;
+            var objInfo = layer is not null
+                ? $"\nObj {layer.ObjectCountOnCurrentPage} / Tex {layer.TextureStats.Count}" +
+                  $" / {layer.TextureStats.EstimatedBytes / (1024.0 * 1024.0):F0} MB(推定)" +
+                  $" / 待 {layer.PendingCount} / 破棄 {layer.StaleDiscardedCount}" +
+                  (layer.DisplayingStale ? " / 暫定画質" : string.Empty)
+                : string.Empty;
             return $"Zoom {ZoomPercent:F0}%  Page {PageDisplayText()}\n" +
-                   $"Cache {cache.Count} pages / {cache.Bytes / (1024.0 * 1024.0):F0} MB" + noteInfo;
+                   $"Cache {cache.Count} pages / {cache.Bytes / (1024.0 * 1024.0):F0} MB" + noteInfo + objInfo;
         });
         _perf.Start(DispatcherQueue, text => PerfText.Text = text);
 
