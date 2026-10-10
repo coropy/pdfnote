@@ -19,6 +19,14 @@
     <Compile Include="..\..\src\PdfNote\Core\Notebook.cs" Link="Core\Notebook.cs" />
     <Compile Include="..\..\src\PdfNote\Core\PageObjectTransform.cs" Link="Core\PageObjectTransform.cs" />
     <Compile Include="..\..\src\PdfNote\Core\PageObjectOperations.cs" Link="Core\PageObjectOperations.cs" />
+    <!-- 段階5 ステップ3: PDF レンダリング経路 (WinUI 非依存のためリンク可能) -->
+    <Compile Include="..\..\src\PdfNote\Core\PdfDocument.cs" Link="Core\PdfDocument.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\PdfRenderQueue.cs" Link="Core\PdfRenderQueue.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\PageBitmapCache.cs" Link="Core\PageBitmapCache.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\RenderedFrame.cs" Link="Core\RenderedFrame.cs" />
+    <Compile Include="..\..\src\PdfNote\Core\RenderScale.cs" Link="Core\RenderScale.cs" />
+    <Compile Include="..\..\src\PdfNote\Session\PdfResourceBundle.cs" Link="Session\PdfResourceBundle.cs" />
+    <Compile Include="..\..\src\PdfNote\Session\PdfResourceRenderService.cs" Link="Session\PdfResourceRenderService.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\InkModel.cs" Link="Ink\InkModel.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\InkOperations.cs" Link="Ink\InkOperations.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NoteDtos.cs" Link="Storage\NoteDtos.cs" />
@@ -29,6 +37,11 @@
     <Compile Include="..\..\src\PdfNote\Storage\NotebookSlotMigrator.cs" Link="Storage\NotebookSlotMigrator.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\TextureLru.cs" Link="Ink\TextureLru.cs" />
     <Compile Include="..\..\src\PdfNote\Session\NotebookSession.cs" Link="Session\NotebookSession.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PDFium ラッパー (本体と同一バージョン。レンダリングサービステスト用) -->
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
   </ItemGroup>
 
 </Project>

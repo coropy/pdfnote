@@ -40,6 +40,10 @@ internal static class Program
         PdfObjectIsolationTests.StrokesInvariantAfterObjectOps(Check);
         PdfObjectIsolationTests.NotebookSwitchIsolatesHistory(Check);
         PdfObjectIsolationTests.StaleOperationIsSafe(Check);
+        RenderServiceTests.RunAllAsync(Check).GetAwaiter().GetResult();
+        RenderServiceFailureTests.RunAllAsync(Check).GetAwaiter().GetResult();
+        RenderServiceConcurrencyTests.RunAllAsync(Check).GetAwaiter().GetResult();
+        RenderServiceLifecycleTests.RunAllAsync(Check).GetAwaiter().GetResult();
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"
