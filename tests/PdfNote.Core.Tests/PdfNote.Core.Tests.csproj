@@ -27,6 +27,9 @@
     <Compile Include="..\..\src\PdfNote\Core\RenderScale.cs" Link="Core\RenderScale.cs" />
     <Compile Include="..\..\src\PdfNote\Session\PdfResourceBundle.cs" Link="Session\PdfResourceBundle.cs" />
     <Compile Include="..\..\src\PdfNote\Session\PdfResourceRenderService.cs" Link="Session\PdfResourceRenderService.cs" />
+    <!-- 段階5 ステップ4: 描画計算 (Win2D 非依存部分のみ) -->
+    <Compile Include="..\..\src\PdfNote\View\PdfObjectMath.cs" Link="View\PdfObjectMath.cs" />
+    <Compile Include="..\..\src\PdfNote\View\TextureCacheCore.cs" Link="View\TextureCacheCore.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\InkModel.cs" Link="Ink\InkModel.cs" />
     <Compile Include="..\..\src\PdfNote\Ink\InkOperations.cs" Link="Ink\InkOperations.cs" />
     <Compile Include="..\..\src\PdfNote\Storage\NoteDtos.cs" Link="Storage\NoteDtos.cs" />

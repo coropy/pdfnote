@@ -64,6 +64,12 @@ public sealed class PdfCanvas : UserControl
     /// <summary>ペン入力イベント (Ink Layer への転送。UI スレッド)。</summary>
     public event Action<InkPointerEvent>? InkPointerReceived;
 
+    /// <summary>
+    /// PDF オブジェクト合成層 (ノートブックモード。null で無効)。
+    /// OnDraw 内で背景の後、Ink の前に呼び出される。
+    /// </summary>
+    public PdfObjectLayer? ObjectLayer { get; set; }
+
     /// <summary>Ink 描画タイミング。session.Transform はページ pt 空間で呼ばれる (UI スレッド)。</summary>
     public event Action<Microsoft.Graphics.Canvas.CanvasDrawingSession>? InkDrawing;
 
@@ -388,6 +394,9 @@ public sealed class PdfCanvas : UserControl
 
             session.DrawRectangle(0f, 0f, width, height, BorderColor, 1f / Math.Max((float)_displayPxPerPt, 0.0001f));
         }
+
+        // PDF オブジェクト層 (背景より前面、Ink より背面。ノートブックモードのみ)。
+        ObjectLayer?.Draw(session, pageTransform, _displayPxPerPt);
 
         // Ink Layer (背景/PDF テクスチャより前面の合成パス)。
         if (InkDrawing is not null && hasPage)

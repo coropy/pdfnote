@@ -44,6 +44,11 @@ internal static class Program
         RenderServiceFailureTests.RunAllAsync(Check).GetAwaiter().GetResult();
         RenderServiceConcurrencyTests.RunAllAsync(Check).GetAwaiter().GetResult();
         RenderServiceLifecycleTests.RunAllAsync(Check).GetAwaiter().GetResult();
+        PdfObjectDrawTests.ContentRectAndRotation(Check);
+        PdfObjectDrawTests.EffectiveScaleAndStaleness(Check);
+        PdfObjectDrawTests.DrawDecision(Check);
+        PdfObjectDrawTests.TextureBudget(Check);
+        PdfObjectDrawTests.TextureCacheCoreLru(Check);
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"

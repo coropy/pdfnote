@@ -29,6 +29,8 @@ public sealed partial class MainWindow : Window
     private readonly NoteAutoSave _autoSave;
     private NotebookSession? _notebook;
     private NotebookAutoSave? _notebookAutoSave;
+    private readonly PdfResourceRenderService _pdfRenderService = new();
+    private PdfObjectLayer? _objectLayer;
     private readonly Stopwatch _stopwatch = new();
     private AppSettings _settings = new();
     private readonly List<KeyboardAccelerator> _customAccelerators = new();
@@ -148,6 +150,7 @@ public sealed partial class MainWindow : Window
 
             CompositionTarget.Rendering -= OnRenderingTick;
             _session.Dispose();
+            _pdfRenderService.Dispose();
         };
     }
 
@@ -184,7 +187,11 @@ public sealed partial class MainWindow : Window
         UpdateToolbar();
     }
 
-    private void OnCanvasZoomSettled(double pxPerPt) => _session.OnZoomSettled();
+    private void OnCanvasZoomSettled(double pxPerPt)
+    {
+        _session.OnZoomSettled();
+        _objectLayer?.OnZoomSettled(); // ズーム確定後に必要な場合だけ再レンダリング (±15%)。
+    }
 
     private void OnCurrentPageChanged(int page) => DispatcherQueue.TryEnqueue(() =>
     {
@@ -689,6 +696,13 @@ public sealed partial class MainWindow : Window
         _session.Close();
         _canvas.ClearFrame();
 
+        // PDF オブジェクト合成層 (ステップ4)。ノートフォルダから assets を解決する。
+        _objectLayer?.Detach();
+        var notebookFolder = Path.GetDirectoryName(savePath)!;
+        _objectLayer = new PdfObjectLayer(_pdfRenderService, DispatcherQueue, () => _canvas.Invalidate());
+        _objectLayer.Attach(session, notebookFolder);
+        _canvas.ObjectLayer = _objectLayer;
+
         var autoSave = new NotebookAutoSave(session, DispatcherQueue) { SavePath = savePath };
         autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(() =>
         {
@@ -736,6 +750,9 @@ public sealed partial class MainWindow : Window
         _notebookAutoSave = null;
         _notebook = null;
         _ink.KeepPageTextures = false;
+        _objectLayer?.Detach();
+        _objectLayer = null;
+        _canvas.ObjectLayer = null;
         _canvas.SetPageBackground(PageBackgroundKind.Plain, NotebookDefaults.GridSpacingPt);
         _canvas.ClearFrame();
         UpdateToolbar();
