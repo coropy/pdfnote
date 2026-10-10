@@ -23,6 +23,12 @@ internal static class Program
         NotebookMigrationTests.MigratesLegacySlotNonDestructively(Check);
         NotebookMigrationTests.DtoIsForwardCompatible(Check);
         NotebookMigrationTests.TextureLruEviction(Check);
+        NotebookObjectTests.PdfObjectRoundTrip(Check);
+        NotebookObjectTests.LegacyV2FileWithoutObjectsLoads(Check);
+        NotebookObjectTransformTests.InvalidObjectsDroppedWithWarnings(Check);
+        NotebookObjectTransformTests.ObjectTransformNeverTouchesStrokes(Check);
+        NotebookObjectValidationTests.RotationAndSizeValidation(Check);
+        NotebookObjectValidationTests.SoftCapDoesNotBlockModel(Check);
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"

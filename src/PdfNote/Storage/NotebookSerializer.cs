@@ -45,6 +45,16 @@ public static class NotebookSerializer
                 strokes.Add(ToStrokeDto(stroke));
             }
 
+            var objects = new List<NotebookObjectFileDto>(page.Objects.Count);
+            foreach (var obj in page.Objects)
+            {
+                if (obj is PdfObject pdf)
+                {
+                    objects.Add(ToPdfObjectDto(pdf));
+                }
+                // 未知の PageObject 派生は保存しない (将来の ImageObject は段階後)。
+            }
+
             pages.Add(new NotebookPageFileDto
             {
                 PageIndex = page.PageIndex,
@@ -56,7 +66,14 @@ public static class NotebookSerializer
                     GridSpacingPt = page.GridSpacingPt,
                 },
                 Strokes = strokes,
+                Objects = objects,
             });
+        }
+
+        var resources = new List<NotebookResourceDto>(notebook.Resources.Count);
+        foreach (var resource in notebook.Resources)
+        {
+            resources.Add(ToResourceDto(resource));
         }
 
         return new NotebookFileDto
@@ -69,11 +86,33 @@ public static class NotebookSerializer
                 CreatedUtc = notebook.CreatedUtc.ToString("o"),
                 UpdatedUtc = notebook.UpdatedUtc.ToString("o"),
             },
-            // 段階5 (PDF/画像オブジェクト) で使用する。空配列を予約しておく。
-            Resources = [],
+            Resources = resources,
             Pages = pages,
         };
     }
+
+    public static NotebookResourceDto ToResourceDto(Resource resource) => new()
+    {
+        Id = resource.Id.ToString("D"),
+        Kind = resource.Kind,
+        FileName = resource.FileName,
+        FileSize = resource.FileSize,
+        LastWriteTimeUtc = resource.LastWriteTimeUtc.ToString("o"),
+    };
+
+    public static NotebookObjectFileDto ToPdfObjectDto(PdfObject pdf) => new()
+    {
+        Kind = "pdf",
+        Id = pdf.Id.ToString("D"),
+        X = pdf.X,
+        Y = pdf.Y,
+        WidthPt = pdf.WidthPt,
+        HeightPt = pdf.HeightPt,
+        RotationDeg = pdf.RotationDeg,
+        Z = pdf.Z,
+        ResourceId = pdf.ResourceId.ToString("D"),
+        PdfPageIndex = pdf.PdfPageIndex,
+    };
 
     public static NoteStrokeDto ToStrokeDto(Stroke stroke)
     {
@@ -163,10 +202,13 @@ public static class NotebookSerializer
         return ParseFile(File.ReadAllText(notebookPath));
     }
 
+    /// <summary>DTO → メモリモデル。不正データはストローク/ページ/オブジェクト単位で破棄し、クラッシュさせない。</summary>
+    public static Notebook ToNotebook(NotebookFileDto file) => ToNotebook(file, warnings: null);
+
     /// <summary>
-    /// DTO → メモリモデル。不正データはストローク/ページ単位で破棄し、クラッシュさせない。
+    /// DTO → メモリモデル。破棄したデータの概要を <paramref name="warnings"/> に蓄積する (null 許容)。
     /// </summary>
-    public static Notebook ToNotebook(NotebookFileDto file)
+    public static Notebook ToNotebook(NotebookFileDto file, List<string>? warnings)
     {
         var info = file.Notebook;
         var id = Guid.TryParse(info?.Id, out var parsedId) ? parsedId : Guid.NewGuid();
@@ -175,6 +217,34 @@ public static class NotebookSerializer
         if (DateTime.TryParse(info?.CreatedUtc, out var created))
         {
             notebook.CreatedUtc = DateTime.SpecifyKind(created.ToUniversalTime(), DateTimeKind.Utc);
+        }
+
+        // リソース (実体参照)。Id 不正のものは破棄する (それを参照するオブジェクトも破棄される)。
+        var resourceIds = new HashSet<Guid>();
+        foreach (var dto in file.Resources ?? [])
+        {
+            if (dto is null)
+            {
+                continue;
+            }
+
+            if (!Guid.TryParse(dto.Id, out var resourceId))
+            {
+                warnings?.Add("リソース ID が不正なため 1 件を破棄しました。");
+                continue;
+            }
+
+            if (!resourceIds.Add(resourceId))
+            {
+                continue; // 重複は 1 件に正規化。
+            }
+
+            notebook.Resources.Add(new Resource(
+                resourceId,
+                string.IsNullOrWhiteSpace(dto.Kind) ? "Pdf" : dto.Kind,
+                dto.FileName ?? string.Empty,
+                dto.FileSize,
+                DateTime.TryParse(dto.LastWriteTimeUtc, out var lw) ? lw : default));
         }
 
         // 不正ページを除外してから PageIndex 順に整列 (重複 / 飛び番号はリスト順に正規化)。
@@ -218,10 +288,90 @@ public static class NotebookSerializer
                 }
             }
 
+            foreach (var objectDto in dto.Objects ?? [])
+            {
+                if (TryParseObject(objectDto, resourceIds, out var obj, out var dropReason))
+                {
+                    page.Objects.Add(obj);
+                }
+                else if (dropReason is not null)
+                {
+                    warnings?.Add(dropReason);
+                }
+            }
+
             notebook.Pages.Add(page);
         }
 
         return notebook;
+    }
+
+    /// <summary>
+    /// オブジェクト DTO の検証。不正な場合は false を返し、dropReason に概要を設定する (クラッシュさせない)。
+    /// </summary>
+    private static bool TryParseObject(
+        NotebookObjectFileDto? dto,
+        HashSet<Guid> resourceIds,
+        out PageObject parsed,
+        out string? dropReason)
+    {
+        parsed = null!;
+        dropReason = null;
+
+        if (dto is null)
+        {
+            return false;
+        }
+
+        if (!string.Equals(dto.Kind, "pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            // 将来の種別 ("image" 等) は破棄して続行 (データは消失するがクラッシュしない)。
+            dropReason = $"未知のオブジェクト種別 ({dto.Kind}) のため 1 件を破棄しました。";
+            return false;
+        }
+
+        if (!Guid.TryParse(dto.Id, out var objectId))
+        {
+            dropReason = "オブジェクト ID が不正なため 1 件を破棄しました。";
+            return false;
+        }
+
+        if (!Guid.TryParse(dto.ResourceId, out var resourceId) || !resourceIds.Contains(resourceId))
+        {
+            dropReason = "参照先リソースが存在しないため 1 件のオブジェクトを破棄しました。";
+            return false;
+        }
+
+        if (dto.PdfPageIndex < 0)
+        {
+            dropReason = "PDF ページ番号が不正なため 1 件のオブジェクトを破棄しました。";
+            return false;
+        }
+
+        if (!float.IsFinite((float)dto.X) || !float.IsFinite((float)dto.Y))
+        {
+            dropReason = "座標が不正なため 1 件のオブジェクトを破棄しました。";
+            return false;
+        }
+
+        if (!PageObjectLimits.IsAllowedRotation(dto.RotationDeg))
+        {
+            dropReason = $"回転角 ({dto.RotationDeg}°) が不正なため 1 件のオブジェクトを破棄しました。";
+            return false;
+        }
+
+        var width = (float)dto.WidthPt;
+        var height = (float)dto.HeightPt;
+        if (!float.IsFinite(width) || width <= 0f || !float.IsFinite(height) || height <= 0f)
+        {
+            dropReason = "寸法が不正なため 1 件のオブジェクトを破棄しました。";
+            return false;
+        }
+
+        parsed = new PdfObject(
+            objectId, resourceId, dto.PdfPageIndex,
+            (float)dto.X, (float)dto.Y, width, height, dto.RotationDeg, dto.Z);
+        return true;
     }
 
     /// <summary>ストロークの検証。不正な場合は null を返す (v1 と同じ規約)。</summary>

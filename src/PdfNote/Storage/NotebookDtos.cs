@@ -83,6 +83,51 @@ public sealed class NotebookPageFileDto
     /// <summary>ストローク (v1 と同じ NoteStrokeDto 構造を再利用)。</summary>
     [JsonPropertyName("strokes")]
     public List<NoteStrokeDto>? Strokes { get; set; }
+
+    /// <summary>
+    /// ページ上のオブジェクト (段階5)。旧形式では欠落 (null → 空として扱う)。
+    /// </summary>
+    [JsonPropertyName("objects")]
+    public List<NotebookObjectFileDto>? Objects { get; set; }
+}
+
+/// <summary>ページ上オブジェクトの DTO。kind で種別を判別する (段階5は "pdf" のみ)。</summary>
+public sealed class NotebookObjectFileDto
+{
+    /// <summary>"pdf" (将来 "image" 等を追加予定。未知の種別は読み込み時に破棄)。</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "pdf";
+
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>ページ左上原点 pt (回転前バウンディング矩形の左上)。</summary>
+    [JsonPropertyName("x")]
+    public double X { get; set; }
+
+    [JsonPropertyName("y")]
+    public double Y { get; set; }
+
+    [JsonPropertyName("widthPt")]
+    public double WidthPt { get; set; }
+
+    [JsonPropertyName("heightPt")]
+    public double HeightPt { get; set; }
+
+    /// <summary>0 / 90 / 180 / 270 のみ (それ以外は読み込み時に破棄)。</summary>
+    [JsonPropertyName("rotationDeg")]
+    public int RotationDeg { get; set; }
+
+    [JsonPropertyName("z")]
+    public int Z { get; set; }
+
+    /// <summary>参照先リソース Id (resources 内に存在しない場合は破棄)。</summary>
+    [JsonPropertyName("resourceId")]
+    public string? ResourceId { get; set; }
+
+    /// <summary>PDF 内ページ番号 (0 始まり)。</summary>
+    [JsonPropertyName("pdfPageIndex")]
+    public int PdfPageIndex { get; set; }
 }
 
 public sealed class NotebookBackgroundDto
