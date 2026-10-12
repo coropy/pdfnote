@@ -31,6 +31,7 @@ public sealed partial class MainWindow : Window
     private NotebookAutoSave? _notebookAutoSave;
     private readonly PdfResourceRenderService _pdfRenderService = new();
     private PdfObjectLayer? _objectLayer;
+    private PdfObjectSelectionController? _selectionController;
     private readonly Stopwatch _stopwatch = new();
     private AppSettings _settings = new();
     private readonly List<KeyboardAccelerator> _customAccelerators = new();
@@ -198,6 +199,10 @@ public sealed partial class MainWindow : Window
     {
         _session.OnZoomSettled();
         _objectLayer?.OnZoomSettled(); // ズーム確定後に必要な場合だけ再レンダリング (±15%)。
+        if (_selectionController is not null)
+        {
+            _selectionController.DisplayPxPerPt = pxPerPt;
+        }
     }
 
     private void OnCurrentPageChanged(int page) => DispatcherQueue.TryEnqueue(() =>
@@ -270,6 +275,7 @@ public sealed partial class MainWindow : Window
         ZoomText.Text = $"{ZoomPercent:F0}%";
         var current = IsNotebookMode ? _notebook!.CurrentPage : _session.CurrentPage;
         var count = IsNotebookMode ? _notebook!.PageCount : _session.PageCount;
+        var selected = _selectionController?.SelectedObjectId is not null;
         PrevButton.IsEnabled = hasPages && current > 0;
         NextButton.IsEnabled = hasPages && count > 0 && current < count - 1;
         UndoButton.IsEnabled = _ink.CanUndo;
@@ -277,11 +283,17 @@ public sealed partial class MainWindow : Window
         PenToolButton.IsEnabled = hasPages;
         EraserToolButton.IsEnabled = hasPages;
         BackgroundToggleButton.IsEnabled = IsNotebookMode;
+        SelectToolButton.IsEnabled = IsNotebookMode;
+        AddPdfButton.IsEnabled = IsNotebookMode;
+        RotateSelectedButton.IsEnabled = IsNotebookMode && selected;
+        BringFrontButton.IsEnabled = IsNotebookMode && selected;
+        SendBackButton.IsEnabled = IsNotebookMode && selected;
         PenToolButton.IsChecked = _ink.CurrentTool == InkTool.Pen;
         EraserToolButton.IsChecked = _ink.CurrentTool == InkTool.Eraser;
         if (IsNotebookMode)
         {
             BackgroundToggleButton.IsChecked = _notebook!.CurrentPageView.Background == PageBackgroundKind.Grid;
+            SelectToolButton.IsChecked = _canvas.Tool == PdfCanvas.PdfCanvasTool.Select;
         }
     }
 
@@ -661,6 +673,219 @@ public sealed partial class MainWindow : Window
         RefreshHome();
     }
 
+    private void OnSelectToolClick(object sender, RoutedEventArgs e)
+    {
+        if (!IsNotebookMode)
+        {
+            SelectToolButton.IsChecked = false;
+            return;
+        }
+
+        _canvas.Tool = SelectToolButton.IsChecked == true
+            ? PdfCanvas.PdfCanvasTool.Select
+            : PdfCanvas.PdfCanvasTool.Pen;
+    }
+
+    private void OnRotateSelectedClick(object sender, RoutedEventArgs e) =>
+        _selectionController?.RotateSelectedClockwise();
+
+    private void OnBringFrontClick(object sender, RoutedEventArgs e) =>
+        _selectionController?.BringToFront();
+
+    private void OnSendBackClick(object sender, RoutedEventArgs e) =>
+        _selectionController?.SendToBack();
+
+    /// <summary>PDF 配置の後始末: 未使用リソースと資産コピーを取り除く。</summary>
+    private void RemoveResourceFromNotebook(Resource resource)
+    {
+        if (_notebook is null)
+        {
+            return;
+        }
+
+        var used = _notebook.Notebook.Pages.Any(p => p.Objects.OfType<PdfObject>().Any(o => o.ResourceId == resource.Id));
+        if (used)
+        {
+            return;
+        }
+
+        _notebook.Notebook.Resources.RemoveAll(r => r.Id == resource.Id);
+        try
+        {
+            var folder = Path.GetDirectoryName(_notebookAutoSave!.SavePath)!;
+            var assetPath = NotebookLibrary.FindResourceFile(folder, resource);
+            if (assetPath is not null)
+            {
+                File.Delete(assetPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            App.LogError("未使用 PDF 資産の削除に失敗しました (放置しても害はありません)。", ex);
+        }
+    }
+
+    private static string DescribeOutcome(NotebookSession.PdfObjectAddStatus status) => status switch
+    {
+        NotebookSession.PdfObjectAddStatus.PageLimitReached => "1ページのオブジェクト数が上限に達しています。",
+        NotebookSession.PdfObjectAddStatus.UnknownResource => "PDFリソースが登録されていません。",
+        NotebookSession.PdfObjectAddStatus.PageIndexOutOfRange => "ページ番号が不正です。",
+        NotebookSession.PdfObjectAddStatus.InvalidTransform => "配置サイズが不正です。",
+        _ => status.ToString(),
+    };
+
+    /// <summary>配置する PDF ページを選ぶダイアログ。キャンセルは null。</summary>
+    private async System.Threading.Tasks.Task<int?> ShowPdfPagePickerAsync(int pageCount)
+    {
+        var comboBox = new ComboBox { MinWidth = 200, SelectedIndex = 0 };
+        for (var i = 1; i <= pageCount; i++)
+        {
+            comboBox.Items.Add($"{i} / {pageCount}");
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "配置するPDFページを選択",
+            Content = comboBox,
+            PrimaryButtonText = "配置",
+            CloseButtonText = "キャンセル",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return null;
+        }
+
+        return comboBox.SelectedIndex;
+    }
+
+    private async System.Threading.Tasks.Task<bool> ShowConfirmAsync(string title, string message, string primaryText)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = message,
+            PrimaryButtonText = primaryText,
+            CloseButtonText = "キャンセル",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    private async void OnAddPdfClick(object sender, RoutedEventArgs e) => await AddPdfObjectToCurrentPageAsync();
+
+    /// <summary>
+    /// PDF ファイルを選んで現在のページへ配置 (最小限の UI)。
+    /// 取り込み → ページ選択 → 配置。取り込み後のキャンセルではコピー資産を削除して後始末する。
+    /// </summary>
+    private async System.Threading.Tasks.Task AddPdfObjectToCurrentPageAsync()
+    {
+        if (_dialogOpen || !IsNotebookMode || _selectionController is null || _objectLayer is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        Resource? resource = null;
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
+            picker.FileTypeFilter.Add(".pdf");
+            var file = await picker.PickSingleFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
+            var notebookFolder = Path.GetDirectoryName(_notebookAutoSave!.SavePath)!;
+            resource = await System.Threading.Tasks.Task.Run(
+                () => NotebookLibrary.AddResource(notebookFolder, file.Path));
+
+            // ページ数取得 (バックグラウンド。UI スレッドはブロックしない)。
+            await _pdfRenderService.OpenAsync(resource.Id, file.Path);
+            var pageCount = _pdfRenderService.TryGetPageCount(resource.Id) ?? 0;
+            if (pageCount <= 0)
+            {
+                await ShowErrorAsync("PDFを配置できませんでした", "ページが含まれていないPDFです。");
+                return;
+            }
+
+            var pdfPageIndex = await ShowPdfPagePickerAsync(pageCount);
+            if (pdfPageIndex is null)
+            {
+                return; // キャンセル (finally で資産を後始末)。
+            }
+
+            // 初期寸法: PDF ページを現在ページの 80% に収め、中央へ配置 (はみ出し防止)。
+            var dims = await _pdfRenderService.GetPageSizePtAsync(resource.Id, pdfPageIndex.Value);
+            var notebookPage = _notebook!.CurrentPageView;
+            var scale = Math.Min(
+                notebookPage.WidthPt * 0.8 / dims.WidthPt,
+                notebookPage.HeightPt * 0.8 / dims.HeightPt);
+            var width = (float)(dims.WidthPt * scale);
+            var height = (float)(dims.HeightPt * scale);
+            var x = Math.Max(8f, (float)((notebookPage.WidthPt - width) / 2));
+            var y = Math.Max(8f, (float)((notebookPage.HeightPt - height) / 2));
+
+            // ノートブックへリソース登録 → オブジェクト配置。
+            if (_notebook.Notebook.Resources.All(r => r.Id != resource.Id))
+            {
+                _notebook.Notebook.Resources.Add(resource);
+            }
+
+            var outcome = _notebook.AddPdfObject(
+                _notebook.CurrentPage, resource.Id, pdfPageIndex.Value,
+                new ObjectTransform(x, y, width, height, 0));
+            if (outcome.Status == NotebookSession.PdfObjectAddStatus.PageLimitReached)
+            {
+                var proceed = await ShowConfirmAsync(
+                    "PDFを配置しますか？",
+                    $"1ページのオブジェクト数が上限 ({PageObjectLimits.MaxObjectsPerPage}) に達しています。\n" +
+                    "性能に影響する可能性がありますが、続行しますか？",
+                    "配置する");
+                if (!proceed)
+                {
+                    RemoveResourceFromNotebook(resource);
+                    return;
+                }
+
+                outcome = _notebook.AddPdfObject(
+                    _notebook.CurrentPage, resource.Id, pdfPageIndex.Value,
+                    new ObjectTransform(x, y, width, height, 0), ignorePageLimit: true);
+            }
+
+            if (outcome.Status != NotebookSession.PdfObjectAddStatus.Added || outcome.Object is null)
+            {
+                RemoveResourceFromNotebook(resource);
+                await ShowErrorAsync("PDFを配置できませんでした", DescribeOutcome(outcome.Status));
+                return;
+            }
+
+            // 追加結果をすぐに選択して描画へ反映 (ContentChanged 経由で層も更新される)。
+            _selectionController.ClearSelection();
+            _objectLayer.SelectedObjectId = outcome.Object.Id;
+            _canvas.Invalidate();
+        }
+        catch (Exception ex)
+        {
+            if (resource is not null)
+            {
+                RemoveResourceFromNotebook(resource);
+            }
+
+            App.LogError("PDF の配置に失敗しました。", ex);
+            await ShowErrorAsync("PDFを配置できませんでした", Describe(ex));
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+    }
+
     private void OnToggleBackgroundClick(object sender, RoutedEventArgs e)
     {
         if (!IsNotebookMode)
@@ -710,6 +935,14 @@ public sealed partial class MainWindow : Window
         _objectLayer.Attach(session, notebookFolder);
         _canvas.ObjectLayer = _objectLayer;
 
+        // 選択ツール (ステップ5)。既定はペンツール。
+        _selectionController = new PdfObjectSelectionController(session, _objectLayer, () => _canvas.Invalidate())
+        {
+            DisplayPxPerPt = _canvas.DisplayPxPerPt,
+        };
+        _canvas.SelectionController = _selectionController;
+        _canvas.Tool = PdfCanvas.PdfCanvasTool.Pen;
+
         var autoSave = new NotebookAutoSave(session, DispatcherQueue) { SavePath = savePath };
         autoSave.StatusChanged += status => DispatcherQueue.TryEnqueue(() =>
         {
@@ -757,6 +990,9 @@ public sealed partial class MainWindow : Window
         _notebookAutoSave = null;
         _notebook = null;
         _ink.KeepPageTextures = false;
+        _selectionController = null;
+        _canvas.SelectionController = null;
+        _canvas.Tool = PdfCanvas.PdfCanvasTool.Pen;
         _objectLayer?.Detach();
         _objectLayer = null;
         _canvas.ObjectLayer = null;
@@ -774,6 +1010,7 @@ public sealed partial class MainWindow : Window
         }
 
         var notebookPage = _notebook.CurrentPageView;
+        _selectionController?.ClearSelection(); // ページ切替で選択解除。
         _canvas.SetPageBackground(notebookPage.Background, notebookPage.GridSpacingPt);
         _canvas.SetPageGeometry(notebookPage.WidthPt, notebookPage.HeightPt);
         _ink.SetPage(page, notebookPage.WidthPt, notebookPage.HeightPt);

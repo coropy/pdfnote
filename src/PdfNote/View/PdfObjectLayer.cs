@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Linq;
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Geometry;
+using Microsoft.Graphics.Canvas.UI;
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Windows.Graphics.DirectX;
@@ -43,6 +45,9 @@ public sealed class PdfObjectLayer
     private readonly Dictionary<Guid, long> _latestRequestId = new();
 
     private readonly Action _invalidate;
+
+    /// <summary>選択中のオブジェクト ID (選択ツールが設定。選択枠描画用。保存データには含めない)。</summary>
+    public Guid? SelectedObjectId { get; set; }
 
     /// <summary>最新要求と不一致で破棄した古い結果の累計 (F9 計測用)。</summary>
     public long StaleDiscardedCount { get; private set; }
@@ -249,7 +254,8 @@ public sealed class PdfObjectLayer
             return;
         }
 
-        foreach (var obj in s.GetObjectsInDrawOrder(page))
+        var drawOrder = s.GetObjectsInDrawOrder(page);
+        foreach (var obj in drawOrder)
         {
             if (obj is not PdfObject pdf)
             {
@@ -271,6 +277,50 @@ public sealed class PdfObjectLayer
                 // 1 オブジェクトの失敗で描画ループ全体を停止させない。
             }
         }
+
+        // 選択枠 (PDF オブジェクトの上、Ink の下。保存データやキャッシュには含めない)。
+        if (SelectedObjectId is { } selectedId)
+        {
+            if (drawOrder.FirstOrDefault(o => o.Id == selectedId) is PdfObject selected && IsVisible(selected))
+            {
+                DrawSelectionFrame(session, pageTransform, displayPxPerPt, selected);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 選択枠と4隅ハンドルを描画する。破線・ハンドルは画面固定サイズ (÷ 表示スケール)。
+    /// </summary>
+    private static void DrawSelectionFrame(
+        CanvasDrawingSession session, Matrix3x2 pageTransform, double displayPxPerPt, PdfObject pdf)
+    {
+        var blue = Color.FromArgb(255, 0, 120, 215);
+        var scale = (float)Math.Max(displayPxPerPt, 0.1);
+        var strokeWidth = 1.5f / scale;
+        var handleHalf = 4f / scale; // 8px のハンドル。
+
+        var previous = session.Transform;
+        session.Transform = pageTransform;
+        var dashStyle = new CanvasStrokeStyle { DashStyle = CanvasDashStyle.Dash };
+        using (dashStyle)
+        {
+            session.DrawRectangle(pdf.X, pdf.Y, pdf.WidthPt, pdf.HeightPt, blue, strokeWidth, dashStyle);
+        }
+
+        var corners = new[]
+        {
+            new Vector2(pdf.X, pdf.Y),
+            new Vector2(pdf.X + pdf.WidthPt, pdf.Y),
+            new Vector2(pdf.X + pdf.WidthPt, pdf.Y + pdf.HeightPt),
+            new Vector2(pdf.X, pdf.Y + pdf.HeightPt),
+        };
+        foreach (var corner in corners)
+        {
+            session.FillRectangle(corner.X - handleHalf, corner.Y - handleHalf, handleHalf * 2f, handleHalf * 2f, Colors.White);
+            session.DrawRectangle(corner.X - handleHalf, corner.Y - handleHalf, handleHalf * 2f, handleHalf * 2f, blue, strokeWidth);
+        }
+
+        session.Transform = previous;
     }
 
     /// <summary>現在の推定 GPU テクスチャ使用量 (F9 表示など将来用)。</summary>

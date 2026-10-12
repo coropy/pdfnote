@@ -123,6 +123,91 @@ public static class PdfObjectMath
                objY - margin < viewY + viewHeight &&
                objY + objHeight + margin > viewY;
     }
+
+    /// <summary>リサイズの操作角 (バウンディング矩形の隅)。</summary>
+    public enum PdfObjectResizeCorner
+    {
+        TopLeft = 0,
+        TopRight = 1,
+        BottomRight = 2,
+        BottomLeft = 3,
+    }
+
+    /// <summary>
+    /// PDF オブジェクトのヒットテスト (ページ座標)。回転を考慮し、
+    /// 逆回転してオブジェクトローカル座標で判定する (0/90/180/270 ではバウンディング矩形と一致)。
+    /// </summary>
+    public static bool HitTestObject(
+        float x, float y, float widthPt, float heightPt, int rotationDeg, Vector2 pagePoint)
+    {
+        var (_, _, contentCenter, radians) = GetContentRect(x, y, widthPt, heightPt, rotationDeg);
+        var boundingCenter = new Vector2(x + widthPt / 2f, y + heightPt / 2f);
+        var rel = pagePoint - boundingCenter;
+
+        // rel を −θ 回転して内容フレームへ (θ: cos/sin)。
+        var cos = MathF.Cos(radians);
+        var sin = MathF.Sin(radians);
+        var dx = rel.X * cos + rel.Y * sin;
+        var dy = -rel.X * sin + rel.Y * cos;
+
+        return Math.Abs(dx) <= contentCenter.X + 0.001f && Math.Abs(dy) <= contentCenter.Y + 0.001f;
+    }
+
+    /// <summary>
+    /// リサイズ用ハンドル (バウンディング矩形の4隅) のヒットテスト。
+    /// halfSizePt はページpt単位 (画面固定サイズ ÷ 表示スケール)。近い角を優先する。
+    /// 戻り値: 角インデックス (PdfObjectResizeCorner)。未ヒットは -1。
+    /// </summary>
+    public static int HitTestHandle(
+        float x, float y, float widthPt, float heightPt, Vector2 pagePoint, float halfSizePt)
+    {
+        var corners = new[]
+        {
+            new Vector2(x, y),                     // TopLeft
+            new Vector2(x + widthPt, y),           // TopRight
+            new Vector2(x + widthPt, y + heightPt),// BottomRight
+            new Vector2(x, y + heightPt),          // BottomLeft
+        };
+
+        var bestIndex = -1;
+        var bestDistanceSq = halfSizePt * halfSizePt;
+        for (var i = 0; i < corners.Length; i++)
+        {
+            var distanceSq = Vector2.DistanceSquared(pagePoint, corners[i]);
+            if (distanceSq <= bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
+    }
+
+    /// <summary>オブジェクトを移動した変換を作る (回転・寸法は不変)。</summary>
+    public static ObjectTransform TranslateTransform(ObjectTransform transform, Vector2 delta) =>
+        transform with { X = transform.X + delta.X, Y = transform.Y + delta.Y };
+
+    /// <summary>
+    /// 指定角をドラッグした場合のリサイズ変換を作る。
+    /// 反対側の角を anchor として固定し、幅・高さは <paramref name="minSizePt"/> を下回らない
+    /// (反転して負の寸法にならない)。回転は不変。
+    /// </summary>
+    public static ObjectTransform ResizeFromCorner(
+        ObjectTransform transform, int corner, Vector2 pagePoint, float minSizePt)
+    {
+        var anchorRight = corner is (int)PdfObjectResizeCorner.TopLeft or (int)PdfObjectResizeCorner.BottomLeft;
+        var anchorBottom = corner is (int)PdfObjectResizeCorner.TopLeft or (int)PdfObjectResizeCorner.TopRight;
+        var anchorX = anchorRight ? transform.X + transform.WidthPt : transform.X;
+        var anchorY = anchorBottom ? transform.Y + transform.HeightPt : transform.Y;
+
+        var newWidth = Math.Max(minSizePt, Math.Abs(pagePoint.X - anchorX));
+        var newHeight = Math.Max(minSizePt, Math.Abs(pagePoint.Y - anchorY));
+        var newX = anchorRight ? anchorX - newWidth : anchorX;
+        var newY = anchorBottom ? anchorY - newHeight : anchorY;
+
+        return new ObjectTransform(newX, newY, newWidth, newHeight, transform.RotationDeg);
+    }
 }
 
 /// <summary>描画時の判断 (純粋関数・テスト可能)。</summary>

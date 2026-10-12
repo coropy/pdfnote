@@ -70,6 +70,48 @@ public sealed class PdfCanvas : UserControl
     /// </summary>
     public PdfObjectLayer? ObjectLayer { get; set; }
 
+    /// <summary>キャンバスのツールモード。</summary>
+    public enum PdfCanvasTool
+    {
+        /// <summary>ペン (既存の入力経路)。</summary>
+        Pen,
+
+        /// <summary>選択 (PDF オブジェクトの選択 / 移動 / リサイズ)。</summary>
+        Select,
+    }
+
+    /// <summary>キャンバスツールモード。既定 = ペン。選択モードでは PDF オブジェクト操作を処理する。</summary>
+    public PdfCanvasTool Tool
+    {
+        get => _tool;
+        set
+        {
+            if (_tool == value)
+            {
+                return;
+            }
+
+            // ペン描画中に選択ツールへ切り替えた場合、進行中のストロークを破棄せずコミットする。
+            if (value == PdfCanvasTool.Select && _penDown)
+            {
+                InkPointerReceived?.Invoke(new InkPointerEvent(
+                    InkPhase.Released, PointerKind.Pen, _lastPenPointerId, 0f, 0f, 0.75f, false, false));
+                _penDown = false;
+            }
+
+            _tool = value;
+        }
+    }
+
+    private PdfCanvasTool _tool = PdfCanvasTool.Pen;
+
+    /// <summary>選択ツールのコントローラ (Tool == Select のときのみ使用)。</summary>
+    public PdfObjectSelectionController? SelectionController { get; set; }
+
+    private bool _penDown;
+    private uint _lastPenPointerId;
+    private uint? _selectionPointerId;
+
     /// <summary>Ink 描画タイミング。session.Transform はページ pt 空間で呼ばれる (UI スレッド)。</summary>
     public event Action<Microsoft.Graphics.Canvas.CanvasDrawingSession>? InkDrawing;
 
@@ -233,10 +275,34 @@ public sealed class PdfCanvas : UserControl
     {
         var point = e.GetCurrentPoint(_canvas);
 
+        // 選択ツール: ヒットテスト / 選択 / ドラッグ (ペン・マウス共通)。
+        if (Tool == PdfCanvasTool.Select && SelectionController is not null)
+        {
+            if (_selectionPointerId is not null)
+            {
+                // 選択ドラッグ中の 2 本目 → 選択をキャンセルして従来のパン / ピンチへ。
+                _selectionPointerId = null;
+                SelectionController.CancelDrag();
+            }
+            else
+            {
+                if (SelectionController.PointerPressed(GetPagePoint(point.Position.ToVector2())))
+                {
+                    _selectionPointerId = e.Pointer.PointerId;
+                    _canvas.CapturePointer(e.Pointer);
+                }
+
+                e.Handled = true;
+                return;
+            }
+        }
+
         // ペンは Ink Layer へ転送 (パン/ズームとは独立)。
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
         {
             _canvas.CapturePointer(e.Pointer);
+            _penDown = true;
+            _lastPenPointerId = e.Pointer.PointerId;
             DispatchInkEvent(e, point, InkPhase.Pressed);
             e.Handled = true;
             return;
@@ -254,6 +320,17 @@ public sealed class PdfCanvas : UserControl
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
         var point = e.GetCurrentPoint(_canvas);
+
+        if (Tool == PdfCanvasTool.Select)
+        {
+            if (_selectionPointerId == e.Pointer.PointerId)
+            {
+                SelectionController?.PointerMoved(GetPagePoint(point.Position.ToVector2()));
+                e.Handled = true;
+            }
+
+            return; // 選択モードではパン / hover 転送を行わない (ペン入力経路に触れない)。
+        }
 
         // ペンは Ink Layer へ転送 (hover 含む。InkSession 側で接触状態を判定する)。
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
@@ -285,8 +362,22 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (Tool == PdfCanvasTool.Select)
+        {
+            if (_selectionPointerId == e.Pointer.PointerId)
+            {
+                _selectionPointerId = null;
+                _canvas.ReleasePointerCapture(e.Pointer);
+                SelectionController?.PointerReleased();
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
         {
+            _penDown = false;
             DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Released);
             _canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
@@ -298,8 +389,21 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerCanceled(object sender, PointerRoutedEventArgs e)
     {
+        if (Tool == PdfCanvasTool.Select)
+        {
+            if (_selectionPointerId == e.Pointer.PointerId)
+            {
+                _selectionPointerId = null;
+                _canvas.ReleasePointerCapture(e.Pointer);
+                SelectionController?.CancelDrag();
+            }
+
+            return;
+        }
+
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
         {
+            _penDown = false;
             DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Canceled);
             _canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
@@ -311,14 +415,30 @@ public sealed class PdfCanvas : UserControl
 
     private void OnPointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
+        if (Tool == PdfCanvasTool.Select)
+        {
+            if (_selectionPointerId == e.Pointer.PointerId)
+            {
+                _selectionPointerId = null;
+                SelectionController?.CancelDrag();
+            }
+
+            return;
+        }
+
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen)
         {
+            _penDown = false;
             DispatchInkEvent(e, e.GetCurrentPoint(_canvas), InkPhase.Canceled);
             return;
         }
 
         RemovePointer(e);
     }
+
+    /// <summary>コントロール座標 → ページpt座標 (既存のズーム / パン変換を再利用)。</summary>
+    private Vector2 GetPagePoint(Vector2 controlPosition) =>
+        _pageWidthPt > 0 ? (controlPosition - _panOffset) / (float)_displayPxPerPt : Vector2.Zero;
 
     private void DispatchInkEvent(PointerRoutedEventArgs e, Microsoft.UI.Input.PointerPoint point, InkPhase phase)
     {

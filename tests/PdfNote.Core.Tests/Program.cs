@@ -51,6 +51,12 @@ internal static class Program
         PdfObjectDrawTests.ViewportCulling(Check);
         PdfObjectDrawTests.TextureBudget(Check);
         PdfObjectDrawTests.TextureCacheCoreLru(Check);
+        PdfObjectSelectionTests.HitTestAllRotations(Check);
+        PdfObjectSelectionTests.ResizeMathClampsMinSize(Check);
+        PdfObjectSelectionFlowTests.FrontmostSelectionAndZOrder(Check);
+        PdfObjectSelectionFlowTests.DragOneHistoryEntry(Check);
+        PdfObjectSelectionFlowTests.DragCancelRestores(Check);
+        PdfObjectSelectionFlowTests.NotebookSwitchIsolatesSelectionAndHistory(Check);
 
         Console.WriteLine(_failures == 0
             ? "ALL TESTS PASSED"

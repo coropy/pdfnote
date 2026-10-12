@@ -189,7 +189,8 @@ public sealed class NotebookSession
         Guid resourceId,
         int pdfPageIndex,
         ObjectTransform transform,
-        Guid? objectId = null)
+        Guid? objectId = null,
+        bool ignorePageLimit = false)
     {
         var page = PageAt(pageIndex);
         if (page is null)
@@ -216,7 +217,9 @@ public sealed class NotebookSession
             return PdfObjectAddOutcome.From(PdfObjectAddStatus.InvalidTransform);
         }
 
-        if (page.Objects.Count >= PageObjectLimits.MaxObjectsPerPage)
+        // ソフト上限。超過時は無言で拒否せず、呼び出し側が警告と続行可否を判断する
+        // (ignorePageLimit = true はユーザーの明示的な続行のみ)。
+        if (page.Objects.Count >= PageObjectLimits.MaxObjectsPerPage && !ignorePageLimit)
         {
             return PdfObjectAddOutcome.From(PdfObjectAddStatus.PageLimitReached);
         }
@@ -296,6 +299,120 @@ public sealed class NotebookSession
         obj.Z = z;
         MarkObjectChanged(new SetObjectZOperation(obj, before, z));
         return true;
+    }
+
+    // ------------------------------------------------------------
+    // 選択ツール (段階5 ステップ5): ドラッグ中のプレビュー / コミット / キャンセル、Z 前後移動。
+    // ------------------------------------------------------------
+
+    /// <summary>
+    /// ドラッグ中の変形を適用する (履歴に積まない)。
+    /// ドラッグ終了時に <see cref="TryCommitObjectTransform"/> を 1 回呼ぶことで、
+    /// ドラッグ 1 回 = 履歴 1 件になる。
+    /// </summary>
+    public bool TryPreviewObjectTransform(int pageIndex, Guid objectId, ObjectTransform transform)
+    {
+        transform.Validate();
+        var obj = PageAt(pageIndex)?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        transform.ApplyTo(obj);
+        Touch();
+        ContentChanged?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// ドラッグ終了: 開始時 (<paramref name="before"/>) から現在値への変形を 1 操作として履歴に積む。
+    /// 同値の変形は履歴に積まない。
+    /// </summary>
+    public bool TryCommitObjectTransform(int pageIndex, Guid objectId, ObjectTransform before)
+    {
+        var obj = PageAt(pageIndex)?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        var after = ObjectTransform.Capture(obj);
+        if (before == after)
+        {
+            return true;
+        }
+
+        Touch();
+        ContentChanged?.Invoke();
+        _pushOperation?.Invoke(new TransformPdfObjectOperation(obj, before, after));
+        return true;
+    }
+
+    /// <summary>ドラッグのキャンセル: 開始時の変形へ戻す (履歴に積まない)。</summary>
+    public bool TryRestoreObjectTransform(int pageIndex, Guid objectId, ObjectTransform before)
+    {
+        var obj = PageAt(pageIndex)?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        var after = ObjectTransform.Capture(obj);
+        if (before == after)
+        {
+            return true;
+        }
+
+        before.Validate();
+        before.ApplyTo(obj);
+        Touch();
+        ContentChanged?.Invoke();
+        return true;
+    }
+
+    /// <summary>選択中オブジェクトを最前面へ (Z = 他の最大 + 1)。Undo 可能。</summary>
+    public bool TryRaiseObjectZ(int pageIndex, Guid objectId)
+    {
+        var page = PageAt(pageIndex);
+        var obj = page?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        var max = -1;
+        foreach (var other in page!.Objects)
+        {
+            if (!ReferenceEquals(other, obj) && other.Z > max)
+            {
+                max = other.Z;
+            }
+        }
+
+        return TrySetObjectZ(pageIndex, objectId, max + 1);
+    }
+
+    /// <summary>選択中オブジェクトを最背面へ (Z = 他の最小 − 1)。Undo 可能。</summary>
+    public bool TryLowerObjectZ(int pageIndex, Guid objectId)
+    {
+        var page = PageAt(pageIndex);
+        var obj = page?.Objects.FirstOrDefault(o => o.Id == objectId);
+        if (obj is null)
+        {
+            return false;
+        }
+
+        var min = int.MaxValue;
+        foreach (var other in page!.Objects)
+        {
+            if (!ReferenceEquals(other, obj) && other.Z < min)
+            {
+                min = other.Z;
+            }
+        }
+
+        return TrySetObjectZ(pageIndex, objectId, min == int.MaxValue ? 0 : min - 1);
     }
 
     /// <summary>Z 順 → リスト順で並べた描画順 (段階5 手順4 で使用)。</summary>

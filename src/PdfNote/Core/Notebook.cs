@@ -107,6 +107,9 @@ public static class PageObjectLimits
     /// <summary>同時に開いたまま保持できる PDF リソース束の上限 (段階5手順3で使用)。</summary>
     public const int MaxResourceSessions = 4;
 
+    /// <summary>リサイズ時の最小寸法 (pt)。0 以下や極端に小さい値を保存しない。</summary>
+    public const float MinObjectSizePt = 20f;
+
     /// <summary>初期版で許可する回転角 (度)。</summary>
     public static readonly int[] AllowedRotations = { 0, 90, 180, 270 };
 

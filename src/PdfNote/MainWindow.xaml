@@ -37,6 +37,10 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <Button x:Name="OpenButton" Grid.Column="0" Click="OnOpenClick"
@@ -100,6 +104,16 @@
                     ToolTipService.ToolTip="ホーム (ノートブック一覧)">
                 <FontIcon Glyph="&#xE80F;" />
             </Button>
+            <ToggleButton x:Name="SelectToolButton" Grid.Column="18" Click="OnSelectToolClick"
+                          ToolTipService.ToolTip="選択ツール (PDFオブジェクトの選択 / 移動 / リサイズ)" Content="選択" />
+            <Button x:Name="RotateSelectedButton" Grid.Column="19" Click="OnRotateSelectedClick"
+                    ToolTipService.ToolTip="選択中オブジェクトを90°回転" Content="回転" />
+            <Button x:Name="BringFrontButton" Grid.Column="20" Click="OnBringFrontClick"
+                    ToolTipService.ToolTip="選択中オブジェクトを最前面へ" Content="前へ" />
+            <Button x:Name="SendBackButton" Grid.Column="21" Click="OnSendBackClick"
+                    ToolTipService.ToolTip="選択中オブジェクトを最背面へ" Content="後ろへ" />
+            <Button x:Name="AddPdfButton" Grid.Column="22" Click="OnAddPdfClick"
+                    ToolTipService.ToolTip="PDFファイルを選んで現在のページへ配置" Content="PDF配置" />
         </Grid>
 
         <!-- PDF 表示領域 (PdfCanvas はコードビハインドで追加。HomeView は最前面に重ねる) -->
