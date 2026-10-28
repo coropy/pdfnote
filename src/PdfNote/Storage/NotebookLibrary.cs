@@ -176,6 +176,40 @@ public static class NotebookLibrary
         return summaries;
     }
 
+    /// <summary>
+    /// 既存ノートブックの表示名と重複しない名前を返す。
+    /// baseName が既に使われている場合は "baseName (1)", "baseName (2)" ... を付加する。
+    /// excludeId は自分自身 (名前変更対象) を重複判定から除外する。
+    /// </summary>
+    public static string EnsureUniqueDisplayName(string root, string displayName, Guid? excludeId = null)
+    {
+        var baseName = string.IsNullOrWhiteSpace(displayName) ? "無題ノート" : displayName.Trim();
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var summary in List(root))
+        {
+            if (excludeId is not null && summary.Id == excludeId)
+            {
+                continue;
+            }
+
+            existing.Add(summary.Name);
+        }
+
+        if (!existing.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        for (var i = 1; ; i++)
+        {
+            var candidate = $"{baseName} ({i})";
+            if (!existing.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
     /// <summary>Id でノートブックを解決する (フォルダ名は参考にしない)。</summary>
     public static (Notebook Notebook, string FolderPath)? FindById(string root, Guid id)
     {

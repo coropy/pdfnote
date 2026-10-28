@@ -507,6 +507,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // 表示名が既存ノートブックと重複する場合は " (1)", " (2)" ... を付加する。
+        try
+        {
+            displayName = await Task.Run(() =>
+                NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, displayName));
+        }
+        catch
+        {
+            // 一覧取得に失敗した場合は元の名前で続行。
+        }
+
         var session = NotebookSession.CreateNew(
             NotebookDefaults.A4WidthPt,
             NotebookDefaults.A4HeightPt,
@@ -593,10 +604,22 @@ public sealed partial class MainWindow : Window
                 await _notebookAutoSave!.FlushPendingAsync();
             }
 
+            // 表示名の重複を避ける (自分自身は重複判定から除外)。
+            string newName;
+            try
+            {
+                newName = await Task.Run(() =>
+                    NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, input.Text, summary.Id));
+            }
+            catch
+            {
+                newName = input.Text;
+            }
+
             string finalFolder;
             try
             {
-                finalFolder = await Task.Run(() => NotebookLibrary.Rename(summary.FolderPath, input.Text));
+                finalFolder = await Task.Run(() => NotebookLibrary.Rename(summary.FolderPath, newName));
             }
             catch (Exception ex)
             {
