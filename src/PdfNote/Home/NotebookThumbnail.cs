@@ -60,7 +60,8 @@ public static class NotebookThumbnail
 
     /// <summary>
     /// 1 ページ目をレンダリングする (UI スレッド。Win2D 共有デバイスを使用)。
-    /// 正方形キャンバスに長辺基準でスケールし、余白 (白) を含めて中央寄せする。
+    /// まずページ形 (pt 比率) で描画し、その結果を正方形キャンバスの中央に
+    /// DrawImage で配置する (縦長 / 横長どちらも同じ大きさ + レターボックス表示)。
     /// 描画不要な場合は null を返す。
     /// </summary>
     public static WriteableBitmap? Render(PageSnapshot snapshot)
@@ -72,20 +73,19 @@ public static class NotebookThumbnail
 
         // 長辺がキャンバス一辺に収まるスケール。余白は白で埋める (見た目上ページと一体化)。
         var pxPerPt = CanvasPixels / Math.Max(snapshot.WidthPt, snapshot.HeightPt);
-        var offsetX = (CanvasPixels - snapshot.WidthPt * pxPerPt) / 2;
-        var offsetY = (CanvasPixels - snapshot.HeightPt * pxPerPt) / 2;
+        var pagePxW = Math.Max(1, (int)Math.Round(snapshot.WidthPt * pxPerPt));
+        var pagePxH = Math.Max(1, (int)Math.Round(snapshot.HeightPt * pxPerPt));
 
-        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), CanvasPixels, CanvasPixels, 96f);
+        // 1) ページ形 (pt 比率) での描画。
+        var pageBmp = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), pagePxW, pagePxH, 96f);
         byte[] pixels;
         try
         {
-            using (var session = target.CreateDrawingSession())
+            using (var session = pageBmp.CreateDrawingSession())
             {
                 session.Clear(Colors.White);
-                // pt 空間 → 正方形 px 空間 (スケール後に中央へ平行移動)。
-                session.Transform =
-                    Matrix3x2.CreateScale((float)pxPerPt) *
-                    Matrix3x2.CreateTranslation((float)offsetX, (float)offsetY);
+                // pt 空間 → px 空間への一括スケール (グリッド / ストローク共通)。
+                session.Transform = Matrix3x2.CreateScale((float)pxPerPt);
                 if (snapshot.Background == PageBackgroundKind.Grid)
                 {
                     DrawGrid(session, snapshot);
@@ -97,11 +97,28 @@ public static class NotebookThumbnail
                 }
             }
 
-            pixels = target.GetPixelBytes();
+            // 2) 正方形キャンバスの中央へ配置 (レターボックス)。
+            var offsetX = (CanvasPixels - pagePxW) / 2;
+            var offsetY = (CanvasPixels - pagePxH) / 2;
+            var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), CanvasPixels, CanvasPixels, 96f);
+            try
+            {
+                using (var square = target.CreateDrawingSession())
+                {
+                    square.Clear(Colors.White);
+                    square.DrawImage(pageBmp, offsetX, offsetY);
+                }
+
+                pixels = target.GetPixelBytes();
+            }
+            finally
+            {
+                target.Dispose();
+            }
         }
         finally
         {
-            target.Dispose();
+            pageBmp.Dispose();
         }
 
         var bitmap = new WriteableBitmap(CanvasPixels, CanvasPixels);
