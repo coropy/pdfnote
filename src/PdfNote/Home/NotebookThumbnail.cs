@@ -18,12 +18,14 @@ namespace PdfNote.Home;
 /// ホーム画面アイコン用のサムネイル生成。
 /// notebook.json の 1 ページ目 (白紙 / 方眼背景 + 手書きストローク) を
 /// Win2D でオフスクリーン描画し、WriteableBitmap として返す。
+/// 描画は常に正方形キャンバスに行い、縦長 / 横長どちらのページも
+/// 長辺基準でスケール + 中央寄せする (アイコン上で見た目の大きさが揃う)。
 /// 背景が白紙でストロークも無い場合は null (XAML 側で純白アイコンを表示)。
 /// </summary>
 public static class NotebookThumbnail
 {
-    /// <summary>サムネイルの目標幅 (px)。A4 比で高さを決める。</summary>
-    private const int BasePixelWidth = 440;
+    /// <summary>サムネイル正方形キャンバスの一辺 (px)。</summary>
+    private const int CanvasPixels = 440;
 
     /// <summary>1 ページ目の描画に必要なデータ (バックグラウンドスレッドで収集)。</summary>
     public sealed record PageSnapshot(
@@ -58,6 +60,7 @@ public static class NotebookThumbnail
 
     /// <summary>
     /// 1 ページ目をレンダリングする (UI スレッド。Win2D 共有デバイスを使用)。
+    /// 正方形キャンバスに長辺基準でスケールし、余白 (白) を含めて中央寄せする。
     /// 描画不要な場合は null を返す。
     /// </summary>
     public static WriteableBitmap? Render(PageSnapshot snapshot)
@@ -67,19 +70,22 @@ public static class NotebookThumbnail
             return null;
         }
 
-        var pxPerPt = BasePixelWidth / snapshot.WidthPt;
-        var widthPx = Math.Max(1, (int)Math.Round(snapshot.WidthPt * pxPerPt));
-        var heightPx = Math.Max(1, (int)Math.Round(snapshot.HeightPt * pxPerPt));
+        // 長辺がキャンバス一辺に収まるスケール。余白は白で埋める (見た目上ページと一体化)。
+        var pxPerPt = CanvasPixels / Math.Max(snapshot.WidthPt, snapshot.HeightPt);
+        var offsetX = (CanvasPixels - snapshot.WidthPt * pxPerPt) / 2;
+        var offsetY = (CanvasPixels - snapshot.HeightPt * pxPerPt) / 2;
 
-        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), widthPx, heightPx, 96f);
+        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), CanvasPixels, CanvasPixels, 96f);
         byte[] pixels;
         try
         {
             using (var session = target.CreateDrawingSession())
             {
                 session.Clear(Colors.White);
-                // pt 空間 → px 空間への一括スケール (グリッド / ストローク共通)。
-                session.Transform = Matrix3x2.CreateScale((float)pxPerPt);
+                // pt 空間 → 正方形 px 空間 (スケール後に中央へ平行移動)。
+                session.Transform =
+                    Matrix3x2.CreateScale((float)pxPerPt) *
+                    Matrix3x2.CreateTranslation((float)offsetX, (float)offsetY);
                 if (snapshot.Background == PageBackgroundKind.Grid)
                 {
                     DrawGrid(session, snapshot);
@@ -98,7 +104,7 @@ public static class NotebookThumbnail
             target.Dispose();
         }
 
-        var bitmap = new WriteableBitmap(widthPx, heightPx);
+        var bitmap = new WriteableBitmap(CanvasPixels, CanvasPixels);
         using (var stream = bitmap.PixelBuffer.AsStream())
         {
             stream.Write(pixels, 0, pixels.Length);

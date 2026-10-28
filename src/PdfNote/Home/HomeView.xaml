@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:home="using:PdfNote.Home">
 
-    <Grid Background="#FF202020" Padding="48,32">
+    <Grid Background="#FF202020" Padding="32,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -25,19 +25,19 @@
         <!-- ノートアイコン (横4列 / 5個目以降は下の行へ折り返し)。クリックで開く、右クリックで操作メニュー。
              スクロールバーは非表示 (ホイール / ドラッグでスクロール可)。グリッド全体は中央配置で左右対称。 -->
         <GridView x:Name="NotebookGrid" Grid.Row="2" Margin="0,20,0,0"
-                  MaxWidth="1240" HorizontalAlignment="Center"
+                  MaxWidth="1000" HorizontalAlignment="Center"
                   ScrollViewer.VerticalScrollBarVisibility="Hidden"
                   SelectionMode="Single" IsItemClickEnabled="True" ItemClick="OnItemClicked">
             <GridView.ItemsPanel>
                 <ItemsPanelTemplate>
                     <ItemsWrapGrid Orientation="Horizontal"
                                    MaximumRowsOrColumns="4"
-                                   ItemWidth="310" ItemHeight="400" />
+                                   ItemWidth="250" ItemHeight="310" />
                 </ItemsPanelTemplate>
             </GridView.ItemsPanel>
             <GridView.ItemTemplate>
                 <DataTemplate x:DataType="home:NotebookIconItem">
-                    <StackPanel Width="240" Spacing="10" Tag="{x:Bind}"
+                    <StackPanel Width="210" Spacing="8" Tag="{x:Bind}"
                                 HorizontalAlignment="Center" VerticalAlignment="Center">
                         <StackPanel.ContextFlyout>
                             <MenuFlyout>
@@ -48,10 +48,9 @@
                             </MenuFlyout>
                         </StackPanel.ContextFlyout>
 
-                        <!-- 1 ページ目サムネイル (手書き無しの白紙は純白のまま)。
-                             ほぼ正方形の領域にどんな比率のページも Uniform で収める。 -->
+                        <!-- 1 ページ目サムネイル (正方形。縦長 / 横長どちらも同じ大きさに見える)。 -->
                         <Border CornerRadius="6" BorderBrush="#55FFFFFF" BorderThickness="1"
-                                Background="White" Height="290" Width="240">
+                                Background="White" Height="210" Width="210">
                             <Grid>
                                 <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
                                 <TextBlock Text="破損" FontSize="18" FontWeight="SemiBold"
