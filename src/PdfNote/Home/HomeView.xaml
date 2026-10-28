@@ -22,19 +22,23 @@
                     ToolTipService.ToolTip="白紙ノート (A4 / 10ページ) を作成" />
         </Grid>
 
-        <!-- ノートアイコン (横4列 / 5個目以降は下の行へ折り返し)。クリックで開く、右クリックで操作メニュー。 -->
+        <!-- ノートアイコン (横4列 / 5個目以降は下の行へ折り返し)。クリックで開く、右クリックで操作メニュー。
+             スクロールバーは非表示 (ホイール / ドラッグでスクロール可)。グリッド全体は中央配置で左右対称。 -->
         <GridView x:Name="NotebookGrid" Grid.Row="2" Margin="0,20,0,0"
+                  MaxWidth="1240" HorizontalAlignment="Center"
+                  ScrollViewer.VerticalScrollBarVisibility="Hidden"
                   SelectionMode="Single" IsItemClickEnabled="True" ItemClick="OnItemClicked">
             <GridView.ItemsPanel>
                 <ItemsPanelTemplate>
                     <ItemsWrapGrid Orientation="Horizontal"
                                    MaximumRowsOrColumns="4"
-                                   ItemWidth="264" ItemHeight="446" />
+                                   ItemWidth="310" ItemHeight="400" />
                 </ItemsPanelTemplate>
             </GridView.ItemsPanel>
             <GridView.ItemTemplate>
                 <DataTemplate x:DataType="home:NotebookIconItem">
-                    <StackPanel Width="240" Spacing="10" Tag="{x:Bind}">
+                    <StackPanel Width="240" Spacing="10" Tag="{x:Bind}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
                         <StackPanel.ContextFlyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="開く" Tag="{x:Bind}" Click="OnMenuOpenClick" />
@@ -44,9 +48,10 @@
                             </MenuFlyout>
                         </StackPanel.ContextFlyout>
 
-                        <!-- 1 ページ目サムネイル (手書き無しの白紙は純白のまま)。 -->
+                        <!-- 1 ページ目サムネイル (手書き無しの白紙は純白のまま)。
+                             ほぼ正方形の領域にどんな比率のページも Uniform で収める。 -->
                         <Border CornerRadius="6" BorderBrush="#55FFFFFF" BorderThickness="1"
-                                Background="White" Height="340" Width="240">
+                                Background="White" Height="290" Width="240">
                             <Grid>
                                 <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
                                 <TextBlock Text="破損" FontSize="18" FontWeight="SemiBold"
