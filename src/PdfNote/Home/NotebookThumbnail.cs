@@ -60,8 +60,9 @@ public static class NotebookThumbnail
 
     /// <summary>
     /// 1 ページ目をレンダリングする (UI スレッド。Win2D 共有デバイスを使用)。
-    /// まずページ形 (pt 比率) で描画し、その結果を正方形キャンバスの中央に
-    /// DrawImage で配置する (縦長 / 横長どちらも同じ大きさ + レターボックス表示)。
+    /// 描画範囲 = ページ矩形 ∪ 全ストロークの境界。その長辺が固定サイズ (正方形フレーム)
+    /// にすべて収まるようスケールする (ページ外のストロークも見切れない)。
+    /// 余白は白で、フレーム側は Stretch=Uniform のレターボックス表示。
     /// 描画不要な場合は null を返す。
     /// </summary>
     public static WriteableBitmap? Render(PageSnapshot snapshot)
@@ -71,21 +72,57 @@ public static class NotebookThumbnail
             return null;
         }
 
-        // 長辺がキャンバス一辺に収まるスケール。余白は白で埋める (見た目上ページと一体化)。
-        var pxPerPt = CanvasPixels / Math.Max(snapshot.WidthPt, snapshot.HeightPt);
-        var pagePxW = Math.Max(1, (int)Math.Round(snapshot.WidthPt * pxPerPt));
-        var pagePxH = Math.Max(1, (int)Math.Round(snapshot.HeightPt * pxPerPt));
+        // 描画範囲を求める: ページ矩形を起点に、全ストロークの境界 (線幅 + 余白) を統合する。
+        var minX = 0.0;
+        var minY = 0.0;
+        var maxX = snapshot.WidthPt;
+        var maxY = snapshot.HeightPt;
+        foreach (var stroke in snapshot.Strokes)
+        {
+            if (stroke.Points.Count == 0)
+            {
+                continue;
+            }
 
-        // 1) ページ形 (pt 比率) での描画。
-        var pageBmp = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), pagePxW, pagePxH, 96f);
+            stroke.GetBounds(out var sx0, out var sy0, out var sx1, out var sy1);
+            if (sx0 == float.MaxValue)
+            {
+                continue;
+            }
+
+            var pad = stroke.WidthPt * 0.6f + 1f;
+            minX = Math.Min(minX, sx0 - pad);
+            minY = Math.Min(minY, sy0 - pad);
+            maxX = Math.Max(maxX, sx1 + pad);
+            maxY = Math.Max(maxY, sy1 + pad);
+        }
+
+        // 枠に接して見えるのを避けるため外側に少し余白を足す。
+        const double outerMarginPt = 2.0;
+        minX -= outerMarginPt;
+        minY -= outerMarginPt;
+        maxX += outerMarginPt;
+        maxY += outerMarginPt;
+
+        var widthPt = Math.Max(1.0, maxX - minX);
+        var heightPt = Math.Max(1.0, maxY - minY);
+
+        // 長辺がキャンバス一辺に収まるスケール (極端な拡大 / 縮小をクランプ)。
+        var pxPerPt = CanvasPixels / Math.Max(widthPt, heightPt);
+        var widthPx = Math.Clamp((int)Math.Round(widthPt * pxPerPt), 1, 4096);
+        var heightPx = Math.Clamp((int)Math.Round(heightPt * pxPerPt), 1, 4096);
+
+        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), widthPx, heightPx, 96f);
         byte[] pixels;
         try
         {
-            using (var session = pageBmp.CreateDrawingSession())
+            using (var session = target.CreateDrawingSession())
             {
                 session.Clear(Colors.White);
-                // pt 空間 → px 空間への一括スケール (グリッド / ストローク共通)。
-                session.Transform = Matrix3x2.CreateScale((float)pxPerPt);
+                // pt 空間 → px 空間: スケール後に -min オフセットで平行移動 (PdfCanvas と同じ S*T 順)。
+                session.Transform =
+                    Matrix3x2.CreateScale((float)pxPerPt) *
+                    Matrix3x2.CreateTranslation((float)-minX, (float)-minY);
                 if (snapshot.Background == PageBackgroundKind.Grid)
                 {
                     DrawGrid(session, snapshot);
@@ -97,31 +134,14 @@ public static class NotebookThumbnail
                 }
             }
 
-            // 2) 正方形キャンバスの中央へ配置 (レターボックス)。
-            var offsetX = (CanvasPixels - pagePxW) / 2;
-            var offsetY = (CanvasPixels - pagePxH) / 2;
-            var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), CanvasPixels, CanvasPixels, 96f);
-            try
-            {
-                using (var square = target.CreateDrawingSession())
-                {
-                    square.Clear(Colors.White);
-                    square.DrawImage(pageBmp, offsetX, offsetY);
-                }
-
-                pixels = target.GetPixelBytes();
-            }
-            finally
-            {
-                target.Dispose();
-            }
+            pixels = target.GetPixelBytes();
         }
         finally
         {
-            pageBmp.Dispose();
+            target.Dispose();
         }
 
-        var bitmap = new WriteableBitmap(CanvasPixels, CanvasPixels);
+        var bitmap = new WriteableBitmap(widthPx, heightPx);
         using (var stream = bitmap.PixelBuffer.AsStream())
         {
             stream.Write(pixels, 0, pixels.Length);
