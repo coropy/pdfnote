@@ -795,8 +795,11 @@ public sealed partial class MainWindow : Window
     /// <summary>新規フォルダを作成する (名前入力ダイアログ)。</summary>
     private async Task CreateFolderAsync(string displayName)
     {
+        App.LogError("CreateFolderAsync: 開始", null);
         if (_dialogOpen || Content.XamlRoot is null)
         {
+            App.LogError($"CreateFolderAsync: ガードで中断 (_dialogOpen={_dialogOpen}, XamlRoot={Content.XamlRoot is not null})", null);
+            HomeViewElement.SetStatus("ただいま他のダイアログ処理中のため実行できませんでした");
             return;
         }
 
@@ -804,16 +807,29 @@ public sealed partial class MainWindow : Window
         try
         {
             var input = new TextBox { Text = displayName };
-            var dialog = new ContentDialog
+            ContentDialog dialog;
+            try
             {
-                Title = "新規フォルダ",
-                Content = input,
-                PrimaryButtonText = "作成",
-                CloseButtonText = "キャンセル",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = Content.XamlRoot,
-            };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                dialog = new ContentDialog
+                {
+                    Title = "新規フォルダ",
+                    Content = input,
+                    PrimaryButtonText = "作成",
+                    CloseButtonText = "キャンセル",
+                    DefaultButton = ContentDialogButton.Primary,
+                    XamlRoot = Content.XamlRoot,
+                };
+            }
+            catch (Exception ex)
+            {
+                App.LogError("CreateFolderAsync: ダイアログ生成に失敗", ex);
+                HomeViewElement.SetStatus("ダイアログを開けませんでした (error.log を確認)");
+                return;
+            }
+
+            var result = await dialog.ShowAsync();
+            App.LogError($"CreateFolderAsync: ダイアログ結果 = {result}", null);
+            if (result != ContentDialogResult.Primary)
             {
                 return;
             }
@@ -822,11 +838,13 @@ public sealed partial class MainWindow : Window
             {
                 var created = await Task.Run(() =>
                     NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, input.Text));
+                App.LogError($"CreateFolderAsync: フォルダ作成成功 = {created}", null);
                 HomeViewElement.NavigateToRoot();
                 HomeViewElement.SetStatus($"フォルダ「{created}」を作成しました");
             }
             catch (Exception ex)
             {
+                App.LogError("CreateFolderAsync: フォルダ作成に失敗", ex);
                 await ShowErrorAsync("フォルダを作成できませんでした", Describe(ex));
                 return;
             }
