@@ -608,6 +608,9 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            // XAML コントロールは UI スレッドでのみ触れるため、先に値を取り出す。
+            var nameInput = input.Text;
+
             var isCurrentlyOpen = IsNotebookMode && _notebook!.Notebook.Id == summary.Id;
             if (isCurrentlyOpen)
             {
@@ -619,11 +622,11 @@ public sealed partial class MainWindow : Window
             try
             {
                 newName = await Task.Run(() =>
-                    NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, input.Text, summary.Id, summary.Folder));
+                    NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, nameInput, summary.Id, summary.Folder));
             }
             catch
             {
-                newName = input.Text;
+                newName = nameInput;
             }
 
             string finalFolder;
@@ -795,11 +798,8 @@ public sealed partial class MainWindow : Window
     /// <summary>新規フォルダを作成する (名前入力ダイアログ)。</summary>
     private async Task CreateFolderAsync(string displayName)
     {
-        App.LogError("CreateFolderAsync: 開始", null);
         if (_dialogOpen || Content.XamlRoot is null)
         {
-            App.LogError($"CreateFolderAsync: ガードで中断 (_dialogOpen={_dialogOpen}, XamlRoot={Content.XamlRoot is not null})", null);
-            HomeViewElement.SetStatus("ただいま他のダイアログ処理中のため実行できませんでした");
             return;
         }
 
@@ -807,44 +807,31 @@ public sealed partial class MainWindow : Window
         try
         {
             var input = new TextBox { Text = displayName };
-            ContentDialog dialog;
-            try
+            var dialog = new ContentDialog
             {
-                dialog = new ContentDialog
-                {
-                    Title = "新規フォルダ",
-                    Content = input,
-                    PrimaryButtonText = "作成",
-                    CloseButtonText = "キャンセル",
-                    DefaultButton = ContentDialogButton.Primary,
-                    XamlRoot = Content.XamlRoot,
-                };
-            }
-            catch (Exception ex)
-            {
-                App.LogError("CreateFolderAsync: ダイアログ生成に失敗", ex);
-                HomeViewElement.SetStatus("ダイアログを開けませんでした (error.log を確認)");
-                return;
-            }
-
-            var result = await dialog.ShowAsync();
-            App.LogError($"CreateFolderAsync: ダイアログ結果 = {result}", null);
-            if (result != ContentDialogResult.Primary)
+                Title = "新規フォルダ",
+                Content = input,
+                PrimaryButtonText = "作成",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
             {
                 return;
             }
 
+            // XAML コントロールは UI スレッドでのみ触れるため、先に値を取り出す。
+            var folderName = input.Text;
             try
             {
                 var created = await Task.Run(() =>
-                    NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, input.Text));
-                App.LogError($"CreateFolderAsync: フォルダ作成成功 = {created}", null);
+                    NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, folderName));
                 HomeViewElement.NavigateToRoot();
                 HomeViewElement.SetStatus($"フォルダ「{created}」を作成しました");
             }
             catch (Exception ex)
             {
-                App.LogError("CreateFolderAsync: フォルダ作成に失敗", ex);
                 await ShowErrorAsync("フォルダを作成できませんでした", Describe(ex));
                 return;
             }
@@ -883,10 +870,12 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            // XAML コントロールは UI スレッドでのみ触れるため、先に値を取り出す。
+            var newFolderName = input.Text;
             try
             {
                 var finalName = await Task.Run(() =>
-                    NotebookLibrary.RenameFolder(NotebookLibrary.DefaultRoot, folder, input.Text));
+                    NotebookLibrary.RenameFolder(NotebookLibrary.DefaultRoot, folder, newFolderName));
                 HomeViewElement.SetStatus($"フォルダ「{folder}」を「{finalName}」に変更しました");
             }
             catch (Exception ex)

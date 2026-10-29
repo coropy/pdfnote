@@ -267,11 +267,8 @@ public sealed partial class HomeView : UserControl
     private void OnCreateClick(object sender, RoutedEventArgs e) =>
         CreateRequested?.Invoke("無題ノート", _currentFolder);
 
-    private void OnCreateFolderClick(object sender, RoutedEventArgs e)
-    {
-        App.LogError("HomeView: 新規フォルダボタン クリック", null);
+    private void OnCreateFolderClick(object sender, RoutedEventArgs e) =>
         CreateFolderRequested?.Invoke("新しいフォルダ");
-    }
 
     private void OnMenuOpenClick(object sender, RoutedEventArgs e)
     {
