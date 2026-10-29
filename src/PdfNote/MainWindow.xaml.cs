@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -137,10 +138,14 @@ public sealed partial class MainWindow : Window
         UpdateToolbar();
 
         // ホーム画面 (ノートブック一覧)。起動時はホームを表示する。
-        HomeViewElement.CreateRequested += name => _ = CreateAndOpenNotebookAsync(name, PageBackgroundKind.Plain);
+        HomeViewElement.CreateRequested += (name, folder) => _ = CreateAndOpenNotebookAsync(name, PageBackgroundKind.Plain, folder);
         HomeViewElement.OpenRequested += summary => _ = OpenNotebookAsync(summary);
         HomeViewElement.RenameRequested += summary => _ = RenameNotebookAsync(summary);
         HomeViewElement.DeleteRequested += summary => _ = DeleteNotebookAsync(summary);
+        HomeViewElement.MoveRequested += summary => _ = MoveNotebookAsync(summary);
+        HomeViewElement.CreateFolderRequested += name => _ = CreateFolderAsync(name);
+        HomeViewElement.RenameFolderRequested += folder => _ = RenameFolderAsync(folder);
+        HomeViewElement.DeleteFolderRequested += folder => _ = DeleteFolderAsync(folder);
         ShowHome();
 
         Closed += (_, _) =>
@@ -459,13 +464,18 @@ public sealed partial class MainWindow : Window
 
     private void RefreshHome()
     {
-        _ = Task.Run(() => NotebookLibrary.List(NotebookLibrary.DefaultRoot))
+        _ = Task.Run(() =>
+            {
+                var notebooks = NotebookLibrary.List(NotebookLibrary.DefaultRoot);
+                var folders = NotebookLibrary.ListFolders(NotebookLibrary.DefaultRoot);
+                return (notebooks, folders);
+            })
             .ContinueWith(
                 task => DispatcherQueue.TryEnqueue(() =>
                 {
                     if (task.Status == TaskStatus.RanToCompletion)
                     {
-                        HomeViewElement.Refresh(task.Result);
+                        HomeViewElement.Refresh(task.Result.notebooks, task.Result.folders);
                     }
                 }),
                 TaskScheduler.Default);
@@ -500,18 +510,18 @@ public sealed partial class MainWindow : Window
         await CreateAndOpenNotebookAsync("無題ノート", PageBackgroundKind.Plain);
 
     /// <summary>白紙ノートを作成して開く。保存先は NotebookLibrary のフォルダ。</summary>
-    private async Task CreateAndOpenNotebookAsync(string displayName, PageBackgroundKind background)
+    private async Task CreateAndOpenNotebookAsync(string displayName, PageBackgroundKind background, string folder = "")
     {
         if (_dialogOpen)
         {
             return;
         }
 
-        // 表示名が既存ノートブックと重複する場合は " (1)", " (2)" ... を付加する。
+        // 表示名が同じフォルダ内の既存ノートと重複する場合は " (1)", " (2)" ... を付加する。
         try
         {
             displayName = await Task.Run(() =>
-                NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, displayName));
+                NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, displayName, folder: folder));
         }
         catch
         {
@@ -524,11 +534,11 @@ public sealed partial class MainWindow : Window
             background,
             pushOperation: _ink.PushOperation);
 
-        string folder;
+        string folderPath;
         try
         {
-            folder = await Task.Run(() =>
-                NotebookLibrary.Create(NotebookLibrary.DefaultRoot, displayName, session.Notebook));
+            folderPath = await Task.Run(() =>
+                NotebookLibrary.Create(NotebookLibrary.DefaultRoot, displayName, session.Notebook, folder));
         }
         catch (Exception ex)
         {
@@ -537,7 +547,7 @@ public sealed partial class MainWindow : Window
         }
 
         HideHome();
-        ActivateNotebook(session, Path.Combine(folder, NotebookLibrary.NotebookFileName));
+        ActivateNotebook(session, Path.Combine(folderPath, NotebookLibrary.NotebookFileName));
     }
 
     /// <summary>既存ノートブックを開き、ページ・背景・ストロークを復元する。</summary>
@@ -609,7 +619,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 newName = await Task.Run(() =>
-                    NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, input.Text, summary.Id));
+                    NotebookLibrary.EnsureUniqueDisplayName(NotebookLibrary.DefaultRoot, input.Text, summary.Id, summary.Folder));
             }
             catch
             {
@@ -685,6 +695,235 @@ public sealed partial class MainWindow : Window
             catch (Exception ex)
             {
                 await ShowErrorAsync("削除できませんでした", Describe(ex));
+                return;
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
+    }
+
+    /// <summary>ノートブックを別のフォルダへ移動する (移動先選択ダイアログ)。</summary>
+    private async Task MoveNotebookAsync(NotebookSummary summary)
+    {
+        if (_dialogOpen || summary.IsBroken || Content.XamlRoot is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var folders = await Task.Run(() => NotebookLibrary.ListFolders(NotebookLibrary.DefaultRoot));
+            var destinations = new List<(string Label, string Folder)>
+            {
+                ("すべてのノート (ルート)", string.Empty),
+            };
+            foreach (var f in folders)
+            {
+                if (!string.Equals(f, summary.Folder, StringComparison.Ordinal))
+                {
+                    destinations.Add((f, f));
+                }
+            }
+
+            var combo = new ComboBox
+            {
+                ItemsSource = destinations.Select(d => d.Label).ToList(),
+                SelectedIndex = 0,
+                MinWidth = 260,
+            };
+            var panel = new StackPanel { Spacing = 12 };
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"「{summary.Name}」の移動先を選択してください。",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            panel.Children.Add(combo);
+            var dialog = new ContentDialog
+            {
+                Title = "ノートブックを移動",
+                Content = panel,
+                PrimaryButtonText = "移動",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            var target = destinations[Math.Max(0, combo.SelectedIndex)].Folder;
+
+            var isCurrentlyOpen = IsNotebookMode && _notebook!.Notebook.Id == summary.Id;
+            if (isCurrentlyOpen)
+            {
+                await _notebookAutoSave!.FlushPendingAsync();
+            }
+
+            string finalFolder;
+            try
+            {
+                finalFolder = await Task.Run(() => NotebookLibrary.Move(summary.FolderPath, target));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("移動できませんでした", Describe(ex));
+                return;
+            }
+
+            if (isCurrentlyOpen)
+            {
+                _notebookAutoSave!.SavePath = Path.Combine(finalFolder, NotebookLibrary.NotebookFileName);
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
+    }
+
+    /// <summary>新規フォルダを作成する (名前入力ダイアログ)。</summary>
+    private async Task CreateFolderAsync(string displayName)
+    {
+        if (_dialogOpen || Content.XamlRoot is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var input = new TextBox { Text = displayName };
+            var dialog = new ContentDialog
+            {
+                Title = "新規フォルダ",
+                Content = input,
+                PrimaryButtonText = "作成",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Run(() => NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, input.Text));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("フォルダを作成できませんでした", Describe(ex));
+                return;
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
+    }
+
+    /// <summary>フォルダ名を変更する (名前入力ダイアログ)。</summary>
+    private async Task RenameFolderAsync(string folder)
+    {
+        if (_dialogOpen || Content.XamlRoot is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var input = new TextBox { Text = folder };
+            var dialog = new ContentDialog
+            {
+                Title = "フォルダ名を変更",
+                Content = input,
+                PrimaryButtonText = "変更",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Run(() => NotebookLibrary.RenameFolder(NotebookLibrary.DefaultRoot, folder, input.Text));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("フォルダ名を変更できませんでした", Describe(ex));
+                return;
+            }
+        }
+        finally
+        {
+            _dialogOpen = false;
+        }
+
+        RefreshHome();
+    }
+
+    /// <summary>フォルダを削除する (中のノートブックも削除される。確認ダイアログで明示)。</summary>
+    private async Task DeleteFolderAsync(string folder)
+    {
+        if (_dialogOpen || Content.XamlRoot is null)
+        {
+            return;
+        }
+
+        _dialogOpen = true;
+        try
+        {
+            var noteCount = await Task.Run(() =>
+                NotebookLibrary.List(NotebookLibrary.DefaultRoot).Count(s => s.Folder == folder));
+            var dialog = new ContentDialog
+            {
+                Title = "フォルダを削除しますか？",
+                Content = $"フォルダ「{folder}」と、中のノートブック ({noteCount} 件) をすべて削除します。\n" +
+                          "この操作は取り消せません。",
+                PrimaryButtonText = "削除",
+                CloseButtonText = "キャンセル",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            // 対象フォルダ内のノートが開いていれば保存を完了させてからモードを破棄。
+            var insideIds = await Task.Run(() =>
+                NotebookLibrary.List(NotebookLibrary.DefaultRoot)
+                    .Where(s => s.Folder == folder)
+                    .Select(s => s.Id)
+                    .ToHashSet());
+            if (IsNotebookMode && insideIds.Contains(_notebook!.Notebook.Id))
+            {
+                await _notebookAutoSave!.FlushPendingAsync();
+                DetachNotebookCore(save: false);
+            }
+
+            try
+            {
+                await Task.Run(() => NotebookLibrary.DeleteFolder(NotebookLibrary.DefaultRoot, folder));
+            }
+            catch (Exception ex)
+            {
+                await ShowErrorAsync("フォルダを削除できませんでした", Describe(ex));
                 return;
             }
         }

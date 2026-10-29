@@ -13,6 +13,9 @@ public sealed class NotebookSummary
 
     public required string FolderName { get; init; }
 
+    /// <summary>所属フォルダのディレクトリ名 (ルートは空文字)。</summary>
+    public string Folder { get; init; } = string.Empty;
+
     /// <summary>notebook.json 内のノート Id (正)。破損時は null。</summary>
     public Guid? Id { get; init; }
 
@@ -82,29 +85,38 @@ public static class NotebookLibrary
 
     /// <summary>
     /// 新規ノートブックを作成する (notebook.json + assets/)。戻り値はノートブックフォルダ。
+    /// folder は所属フォルダのディレクトリ名 (ルートは null / 空文字)。
     /// notebook.Name は表示名で更新される (Id は呼び出し側で確定済みであること)。
     /// </summary>
-    public static string Create(string root, string displayName, Notebook notebook)
+    public static string Create(string root, string displayName, Notebook notebook, string? folder = null)
     {
         Directory.CreateDirectory(root);
+        var parent = GetFolderDirectory(root, folder);
         notebook.Name = string.IsNullOrWhiteSpace(displayName) ? "無題ノート" : displayName.Trim();
         notebook.UpdatedUtc = DateTime.UtcNow;
 
         var baseName = $"{SanitizeFolderName(notebook.Name)}-{ShortId(notebook.Id)}";
-        var folder = Path.Combine(root, baseName);
-        for (var i = 2; Directory.Exists(folder); i++)
+        var folderPath = Path.Combine(parent, baseName);
+        for (var i = 2; Directory.Exists(folderPath); i++)
         {
-            folder = Path.Combine(root, $"{baseName}-{i}");
+            folderPath = Path.Combine(parent, $"{baseName}-{i}");
         }
 
-        Directory.CreateDirectory(folder);
-        Directory.CreateDirectory(Path.Combine(folder, "assets"));
-        NotebookSerializer.Save(Path.Combine(folder, NotebookFileName), NotebookSerializer.ToFile(notebook));
-        return folder;
+        Directory.CreateDirectory(folderPath);
+        Directory.CreateDirectory(Path.Combine(folderPath, "assets"));
+        NotebookSerializer.Save(Path.Combine(folderPath, NotebookFileName), NotebookSerializer.ToFile(notebook));
+        return folderPath;
     }
+
+    /// <summary>フォルダ (ディレクトリ) の実パスを解決する (ルートは root 自身)。</summary>
+    private static string GetFolderDirectory(string root, string? folder) =>
+        string.IsNullOrWhiteSpace(folder)
+            ? root
+            : Path.Combine(root, SanitizeFolderName(folder));
 
     /// <summary>
     /// ノートブック一覧 (最近更新順)。破損フォルダは IsBroken=true で表示する (隠さない)。
+    /// 構成はルート直下 or 1 階層のフォルダ (<root>/<フォルダ>/<ノート>)。2 階層以上は無視。
     /// 旧形式のフラットファイル (*.nb.json) は無視する (NotebookSlotMigrator が扱う)。
     /// </summary>
     public static IReadOnlyList<NotebookSummary> List(string root)
@@ -115,60 +127,22 @@ public static class NotebookLibrary
             return summaries;
         }
 
-        foreach (var folder in Directory.EnumerateDirectories(root))
+        foreach (var dir in Directory.EnumerateDirectories(root))
         {
-            var jsonPath = Path.Combine(folder, NotebookFileName);
-            if (!File.Exists(jsonPath))
+            var dirName = Path.GetFileName(dir);
+            if (File.Exists(Path.Combine(dir, NotebookFileName)))
             {
+                AddSummary(summaries, dir, string.Empty);
                 continue;
             }
 
-            var folderName = Path.GetFileName(folder);
-            try
+            // ノートブックを持たないディレクトリはフォルダ。直下のノートを収集する。
+            foreach (var sub in Directory.EnumerateDirectories(dir))
             {
-                var file = NotebookSerializer.LoadFile(jsonPath);
-                var id = Guid.TryParse(file.Notebook?.Id, out var parsed) ? parsed : (Guid?)null;
-                var pages = 0;
-                var strokes = 0;
-                foreach (var page in file.Pages ?? [])
+                if (File.Exists(Path.Combine(sub, NotebookFileName)))
                 {
-                    pages++;
-                    strokes += page?.Strokes?.Count ?? 0;
+                    AddSummary(summaries, sub, dirName);
                 }
-
-                var updated = DateTime.TryParse(file.Notebook?.UpdatedUtc, out var u) ? u : DateTime.MinValue;
-                summaries.Add(new NotebookSummary
-                {
-                    FolderPath = folder,
-                    FolderName = folderName,
-                    Id = id,
-                    Name = string.IsNullOrWhiteSpace(file.Notebook?.Name) ? "(無題)" : file.Notebook!.Name,
-                    UpdatedUtc = updated,
-                    PageCount = pages,
-                    StrokeCount = strokes,
-                });
-            }
-            catch (Exception ex)
-            {
-                DateTime updated;
-                try
-                {
-                    updated = File.GetLastWriteTimeUtc(jsonPath);
-                }
-                catch
-                {
-                    updated = DateTime.MinValue;
-                }
-
-                summaries.Add(new NotebookSummary
-                {
-                    FolderPath = folder,
-                    FolderName = folderName,
-                    Name = "(破損)",
-                    UpdatedUtc = updated,
-                    IsBroken = true,
-                    Error = ex.Message,
-                });
             }
         }
 
@@ -176,18 +150,183 @@ public static class NotebookLibrary
         return summaries;
     }
 
+    /// <summary>1 つのノートブックフォルダから NotebookSummary を生成して追加する。</summary>
+    private static void AddSummary(List<NotebookSummary> summaries, string noteDirectory, string folder)
+    {
+        var jsonPath = Path.Combine(noteDirectory, NotebookFileName);
+        var folderName = Path.GetFileName(noteDirectory);
+        try
+        {
+            var file = NotebookSerializer.LoadFile(jsonPath);
+            var id = Guid.TryParse(file.Notebook?.Id, out var parsed) ? parsed : (Guid?)null;
+            var pages = 0;
+            var strokes = 0;
+            foreach (var page in file.Pages ?? [])
+            {
+                pages++;
+                strokes += page?.Strokes?.Count ?? 0;
+            }
+
+            var updated = DateTime.TryParse(file.Notebook?.UpdatedUtc, out var u) ? u : DateTime.MinValue;
+            summaries.Add(new NotebookSummary
+            {
+                FolderPath = noteDirectory,
+                FolderName = folderName,
+                Folder = folder,
+                Id = id,
+                Name = string.IsNullOrWhiteSpace(file.Notebook?.Name) ? "(無題)" : file.Notebook!.Name,
+                UpdatedUtc = updated,
+                PageCount = pages,
+                StrokeCount = strokes,
+            });
+        }
+        catch (Exception ex)
+        {
+            DateTime updated;
+            try
+            {
+                updated = File.GetLastWriteTimeUtc(jsonPath);
+            }
+            catch
+            {
+                updated = DateTime.MinValue;
+            }
+
+            summaries.Add(new NotebookSummary
+            {
+                FolderPath = noteDirectory,
+                FolderName = folderName,
+                Folder = folder,
+                Name = "(破損)",
+                UpdatedUtc = updated,
+                IsBroken = true,
+                Error = ex.Message,
+            });
+        }
+    }
+
+    /// <summary>
+    /// フォルダ一覧 (<root> 直下のノートブックを持たないディレクトリ名)。名前順。
+    /// 空フォルダも含まれる (物理ディレクトリとして存在するため)。
+    /// </summary>
+    public static IReadOnlyList<string> ListFolders(string root)
+    {
+        var folders = new List<string>();
+        if (!Directory.Exists(root))
+        {
+            return folders;
+        }
+
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (!File.Exists(Path.Combine(dir, NotebookFileName)))
+            {
+                folders.Add(Path.GetFileName(dir));
+            }
+        }
+
+        folders.Sort(StringComparer.OrdinalIgnoreCase);
+        return folders;
+    }
+
+    /// <summary>新規フォルダを作成する (同名時は "名前 (1)", "名前 (2)" ...)。戻り値は確定したディレクトリ名。</summary>
+    public static string CreateFolder(string root, string displayName)
+    {
+        Directory.CreateDirectory(root);
+        var baseName = SanitizeFolderName(displayName);
+        var target = Path.Combine(root, baseName);
+        for (var i = 2; Directory.Exists(target); i++)
+        {
+            target = Path.Combine(root, $"{baseName} ({i})");
+        }
+
+        Directory.CreateDirectory(target);
+        return Path.GetFileName(target);
+    }
+
+    /// <summary>フォルダ名を変更する (同名時は "名前 (1)", ... を付加)。戻り値は確定したディレクトリ名。</summary>
+    public static string RenameFolder(string root, string folder, string newName)
+    {
+        var source = Path.Combine(root, SanitizeFolderName(folder));
+        if (!Directory.Exists(source))
+        {
+            throw new DirectoryNotFoundException($"フォルダが見つかりません: {source}");
+        }
+
+        var baseName = SanitizeFolderName(newName);
+        var target = Path.Combine(root, baseName);
+        if (!string.Equals(target, source, StringComparison.OrdinalIgnoreCase))
+        {
+            for (var i = 2; Directory.Exists(target); i++)
+            {
+                target = Path.Combine(root, $"{baseName} ({i})");
+            }
+
+            Directory.Move(source, target);
+        }
+
+        return Path.GetFileName(target);
+    }
+
+    /// <summary>
+    /// フォルダと中身 (ノートブック) をすべて削除する (呼び出し側で確認ダイアログを表示すること)。
+    /// 開いているノートが含まれる場合は呼び出し側で先にデタッチすること。
+    /// </summary>
+    public static void DeleteFolder(string root, string folder)
+    {
+        var target = Path.Combine(root, SanitizeFolderName(folder));
+        if (!Directory.Exists(target))
+        {
+            return;
+        }
+
+        Directory.Delete(target, recursive: true);
+    }
+
+    /// <summary>
+    /// ノートブックを別のフォルダへ移動する。targetFolder はディレクトリ名 (ルートは null / 空文字)。
+    /// 戻り値は移動後のノートブックフォルダ。
+    /// </summary>
+    public static string Move(string folderPath, string? targetFolder)
+    {
+        if (!Directory.Exists(folderPath))
+        {
+            throw new DirectoryNotFoundException($"ノートブックフォルダが見つかりません: {folderPath}");
+        }
+
+        var root = Path.GetDirectoryName(folderPath)
+            ?? throw new InvalidOperationException($"不正なパスです: {folderPath}");
+        var parent = GetFolderDirectory(root, targetFolder);
+        Directory.CreateDirectory(parent);
+
+        var baseName = Path.GetFileName(folderPath);
+        var destination = Path.Combine(parent, baseName);
+        for (var i = 2; Directory.Exists(destination); i++)
+        {
+            destination = Path.Combine(parent, $"{baseName}-{i}");
+        }
+
+        Directory.Move(folderPath, destination);
+        return destination;
+    }
+
     /// <summary>
     /// 既存ノートブックの表示名と重複しない名前を返す。
     /// baseName が既に使われている場合は "baseName (1)", "baseName (2)" ... を付加する。
-    /// excludeId は自分自身 (名前変更対象) を重複判定から除外する。
+    /// excludeId は自分自身 (名前変更対象) を重複判定から除外する。folder は同じフォルダ内のみ比較。
     /// </summary>
-    public static string EnsureUniqueDisplayName(string root, string displayName, Guid? excludeId = null)
+    public static string EnsureUniqueDisplayName(string root, string displayName, Guid? excludeId = null, string? folder = null)
     {
         var baseName = string.IsNullOrWhiteSpace(displayName) ? "無題ノート" : displayName.Trim();
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var summary in List(root))
         {
             if (excludeId is not null && summary.Id == excludeId)
+            {
+                continue;
+            }
+
+            if (!string.Equals(summary.Folder, folder ?? string.Empty, StringComparison.Ordinal))
             {
                 continue;
             }

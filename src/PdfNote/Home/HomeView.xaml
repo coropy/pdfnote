@@ -8,6 +8,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -15,16 +16,30 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="ノートブック" FontSize="28" FontWeight="SemiBold" />
             <Button x:Name="CreateButton" Grid.Column="1" Click="OnCreateClick" Content="新規作成"
                     ToolTipService.ToolTip="白紙ノート (A4 / 10ページ) を作成" />
+            <Button x:Name="CreateFolderButton" Grid.Column="2" Click="OnCreateFolderClick" Content="新規フォルダ"
+                    ToolTipService.ToolTip="ノートを整理するフォルダを作成" />
         </Grid>
 
-        <!-- ノートアイコン (横4列 / 5個目以降は下の行へ折り返し)。クリックで開く、右クリックで操作メニュー。
-             スクロールバーは非表示 (ホイール / ドラッグでスクロール可)。グリッド全体は中央配置で左右対称。 -->
-        <GridView x:Name="NotebookGrid" Grid.Row="2" Margin="0,20,0,0"
+        <!-- 現在位置 (パンくず)。フォルダ内では「←」でルートへ戻れる。 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+            <Button x:Name="BackButton" Click="OnBackClick" Padding="4,2"
+                    ToolTipService.ToolTip="上の階層へ戻る" Visibility="Collapsed">
+                <FontIcon Glyph="&#xE72B;" FontSize="14" />
+            </Button>
+            <TextBlock x:Name="PathText" VerticalAlignment="Center" FontSize="14"
+                       Foreground="#CCB0B0B0" Text="すべてのノート" />
+        </StackPanel>
+
+        <!-- ノート / フォルダアイコン (横4列 / 5個目以降は下の行へ折り返し)。
+             クリックで開く (フォルダは開く=中へ)、右クリックで操作メニュー。
+             スクロールバーは非表示 (ホイール / ドラッグでスクロール可)。中央配置で左右対称。 -->
+        <GridView x:Name="NotebookGrid" Grid.Row="3" Margin="0,20,0,0"
                   MaxWidth="1000" HorizontalAlignment="Center"
                   ScrollViewer.VerticalScrollBarVisibility="Hidden"
                   SelectionMode="Single" IsItemClickEnabled="True" ItemClick="OnItemClicked">
@@ -36,33 +51,41 @@
                 </ItemsPanelTemplate>
             </GridView.ItemsPanel>
             <GridView.ItemTemplate>
-                <DataTemplate x:DataType="home:NotebookIconItem">
+                <DataTemplate x:DataType="home:HomeItem">
                     <StackPanel Width="210" Spacing="8" Tag="{x:Bind}"
                                 HorizontalAlignment="Center" VerticalAlignment="Center">
                         <StackPanel.ContextFlyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="開く" Tag="{x:Bind}" Click="OnMenuOpenClick" />
+                                <MenuFlyoutItem Text="移動" Tag="{x:Bind}" Click="OnMenuMoveClick"
+                                                Visibility="{x:Bind MoveVisibility}" />
                                 <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="名前変更" Tag="{x:Bind}" Click="OnMenuRenameClick" />
                                 <MenuFlyoutItem Text="削除" Tag="{x:Bind}" Click="OnMenuDeleteClick" />
                             </MenuFlyout>
                         </StackPanel.ContextFlyout>
 
-                        <!-- 1 ページ目サムネイル (正方形。縦長 / 横長どちらも同じ大きさに見える)。 -->
-                        <Border Background="#FF202020" Height="210" Width="210">
-                            <Grid>
-                                <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
-                                <TextBlock Text="破損" FontSize="18" FontWeight="SemiBold"
-                                           Foreground="#FFB0B0B0"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           Visibility="{x:Bind BrokenVisibility, Mode=OneWay}" />
-                            </Grid>
-                        </Border>
+                        <Grid Height="210" Width="210">
+                            <!-- フォルダ -->
+                            <FontIcon Glyph="&#xE8B7;" FontSize="120" Foreground="#FFB0B0B0"
+                                      Visibility="{x:Bind FolderVisibility}" />
+                            <!-- 1 ページ目サムネイル (正方形。縦長 / 横長どちらも同じ大きさに見える)。 -->
+                            <Border Background="#FF202020" Height="210" Width="210"
+                                    Visibility="{x:Bind NoteVisibility}">
+                                <Grid>
+                                    <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
+                                    <TextBlock Text="破損" FontSize="18" FontWeight="SemiBold"
+                                               Foreground="#FFB0B0B0"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Visibility="{x:Bind BrokenVisibility, Mode=OneWay}" />
+                                </Grid>
+                            </Border>
+                        </Grid>
 
-                        <TextBlock Text="{x:Bind Name}" FontSize="15"
+                        <TextBlock Text="{x:Bind Title}" FontSize="15"
                                    TextTrimming="CharacterEllipsis" MaxLines="1"
                                    HorizontalAlignment="Left" />
-                        <TextBlock Text="{x:Bind UpdatedText}" FontSize="11"
+                        <TextBlock Text="{x:Bind SubText}" FontSize="11"
                                    Foreground="#CCB0B0B0" HorizontalAlignment="Left" />
                     </StackPanel>
                 </DataTemplate>
