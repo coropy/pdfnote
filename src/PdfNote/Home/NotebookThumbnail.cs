@@ -27,18 +27,16 @@ public static class NotebookThumbnail
     /// <summary>サムネイル正方形キャンバスの一辺 (px)。</summary>
     private const int CanvasPixels = 440;
 
+    /// <summary>ページ矩形の外側 (ノート外) の色 = ホーム背景色。</summary>
+    private static readonly Color PageOutsideColor = Color.FromArgb(0xFF, 0x20, 0x20, 0x20);
+
     /// <summary>1 ページ目の描画に必要なデータ (バックグラウンドスレッドで収集)。</summary>
     public sealed record PageSnapshot(
         double WidthPt,
         double HeightPt,
         PageBackgroundKind Background,
         float GridSpacingPt,
-        IReadOnlyList<Stroke> Strokes)
-    {
-        /// <summary>描画の必要があるか (白紙かつストローク無しは不要)。</summary>
-        public bool NeedsRender =>
-            Strokes.Count > 0 || Background != PageBackgroundKind.Plain;
-    }
+        IReadOnlyList<Stroke> Strokes);
 
     /// <summary>notebook.json から 1 ページ目のスナップショットを取り出す (任意スレッド)。</summary>
     public static PageSnapshot? LoadPage(string notebookJsonPath)
@@ -62,12 +60,12 @@ public static class NotebookThumbnail
     /// 1 ページ目をレンダリングする (UI スレッド。Win2D 共有デバイスを使用)。
     /// 描画範囲 = ページ矩形 ∪ 全ストロークの境界。その長辺が固定サイズ (正方形フレーム)
     /// にすべて収まるようスケールする (ページ外のストロークも見切れない)。
-    /// 余白は白で、フレーム側は Stretch=Uniform のレターボックス表示。
-    /// 描画不要な場合は null を返す。
+    /// ページ矩形は白、その外側はホーム背景色でノートの形が見えるようにする。
+    /// 白紙ノートも白ページとして描画する (null は読み込み不能時のみ)。
     /// </summary>
     public static WriteableBitmap? Render(PageSnapshot snapshot)
     {
-        if (!snapshot.NeedsRender)
+        if (snapshot.WidthPt <= 0 || snapshot.HeightPt <= 0)
         {
             return null;
         }
@@ -118,11 +116,13 @@ public static class NotebookThumbnail
         {
             using (var session = target.CreateDrawingSession())
             {
-                session.Clear(Colors.White);
+                // ノート外 (ページ矩形の外側) はホーム背景色。ページ矩形を白で塗り、形を見せる。
+                session.Clear(PageOutsideColor);
                 // pt 空間 → px 空間: スケール後に -min オフセットで平行移動 (PdfCanvas と同じ S*T 順)。
                 session.Transform =
                     Matrix3x2.CreateScale((float)pxPerPt) *
                     Matrix3x2.CreateTranslation((float)-minX, (float)-minY);
+                session.FillRectangle(0f, 0f, (float)snapshot.WidthPt, (float)snapshot.HeightPt, Colors.White);
                 if (snapshot.Background == PageBackgroundKind.Grid)
                 {
                     DrawGrid(session, snapshot);
