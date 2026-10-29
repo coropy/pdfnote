@@ -23,7 +23,9 @@
             <Button x:Name="CreateButton" Grid.Column="1" Click="OnCreateClick" Content="新規作成"
                     ToolTipService.ToolTip="白紙ノート (A4 / 10ページ) を作成" />
             <Button x:Name="CreateFolderButton" Grid.Column="2" Click="OnCreateFolderClick" Content="新規フォルダ"
-                    ToolTipService.ToolTip="ノートを整理するフォルダを作成" />
+                    ToolTipService.ToolTip="ノートを整理するフォルダを作成 (ルート直下に作成されます)" />
+            <TextBlock x:Name="HomeStatusText" Grid.Column="3" HorizontalAlignment="Right"
+                       VerticalAlignment="Center" FontSize="12" Foreground="#CCB0B0B0" />
         </Grid>
 
         <!-- 現在位置 (パンくず)。フォルダ内では「←」でルートへ戻れる。 -->

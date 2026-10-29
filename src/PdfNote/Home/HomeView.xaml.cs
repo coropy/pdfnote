@@ -150,6 +150,11 @@ public sealed partial class HomeView : UserControl
         NotebookGrid.ItemsSource = items;
         SyncNav();
 
+        // フォルダはルート直下限定。フォルダ内では作成できないようにする。
+        CreateFolderButton.Visibility = string.IsNullOrEmpty(_currentFolder)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
         foreach (var item in items.Where(i => i.Summary is { IsBroken: false }))
         {
             StartThumbnailLoad(item);
@@ -175,6 +180,18 @@ public sealed partial class HomeView : UserControl
     {
         _currentFolder = string.Empty;
         RebuildItems();
+    }
+
+    /// <summary>ホームのルート階層へ戻る (フォルダ作成後などに呼ぶ)。</summary>
+    public void NavigateToRoot()
+    {
+        _currentFolder = string.Empty;
+    }
+
+    /// <summary>ホーム上部に操作結果を表示する (確認用)。</summary>
+    public void SetStatus(string? message)
+    {
+        HomeStatusText.Text = message ?? string.Empty;
     }
 
     /// <summary>1 ページ目のサムネイルを生成してアイコンへ反映 (バックグラウンド読み込み + UI スレッド描画)。</summary>

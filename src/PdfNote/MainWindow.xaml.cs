@@ -780,6 +780,9 @@ public sealed partial class MainWindow : Window
             {
                 _notebookAutoSave!.SavePath = Path.Combine(finalFolder, NotebookLibrary.NotebookFileName);
             }
+
+            HomeViewElement.SetStatus(
+                $"「{summary.Name}」を {(string.IsNullOrEmpty(target) ? "ルート" : $"「{target}」")} へ移動しました");
         }
         finally
         {
@@ -817,7 +820,10 @@ public sealed partial class MainWindow : Window
 
             try
             {
-                await Task.Run(() => NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, input.Text));
+                var created = await Task.Run(() =>
+                    NotebookLibrary.CreateFolder(NotebookLibrary.DefaultRoot, input.Text));
+                HomeViewElement.NavigateToRoot();
+                HomeViewElement.SetStatus($"フォルダ「{created}」を作成しました");
             }
             catch (Exception ex)
             {
@@ -861,7 +867,9 @@ public sealed partial class MainWindow : Window
 
             try
             {
-                await Task.Run(() => NotebookLibrary.RenameFolder(NotebookLibrary.DefaultRoot, folder, input.Text));
+                var finalName = await Task.Run(() =>
+                    NotebookLibrary.RenameFolder(NotebookLibrary.DefaultRoot, folder, input.Text));
+                HomeViewElement.SetStatus($"フォルダ「{folder}」を「{finalName}」に変更しました");
             }
             catch (Exception ex)
             {
@@ -920,6 +928,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 await Task.Run(() => NotebookLibrary.DeleteFolder(NotebookLibrary.DefaultRoot, folder));
+                HomeViewElement.SetStatus($"フォルダ「{folder}」を削除しました");
             }
             catch (Exception ex)
             {
