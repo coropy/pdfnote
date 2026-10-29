@@ -27,9 +27,6 @@ public static class NotebookThumbnail
     /// <summary>サムネイル正方形キャンバスの一辺 (px)。</summary>
     private const int CanvasPixels = 440;
 
-    /// <summary>ページ矩形の外側 (ノート外) の色 = ホーム背景色。</summary>
-    private static readonly Color PageOutsideColor = Color.FromArgb(0xFF, 0x20, 0x20, 0x20);
-
     /// <summary>1 ページ目の描画に必要なデータ (バックグラウンドスレッドで収集)。</summary>
     public sealed record PageSnapshot(
         double WidthPt,
@@ -58,9 +55,9 @@ public static class NotebookThumbnail
 
     /// <summary>
     /// 1 ページ目をレンダリングする (UI スレッド。Win2D 共有デバイスを使用)。
-    /// 描画範囲 = ページ矩形 ∪ 全ストロークの境界。その長辺が固定サイズ (正方形フレーム)
-    /// にすべて収まるようスケールする (ページ外のストロークも見切れない)。
-    /// ページ矩形は白、その外側はホーム背景色でノートの形が見えるようにする。
+    /// 正方形キャンバスに「ページの中心」をキャンバス中心に合わせて描画する。
+    /// スケールはページ矩形 ∪ 全ストロークの境界が全体に収まるように選ぶ
+    /// (ページ外に描かれたストロークも見切れない)。ページ外は透明。
     /// 白紙ノートも白ページとして描画する (null は読み込み不能時のみ)。
     /// </summary>
     public static WriteableBitmap? Render(PageSnapshot snapshot)
@@ -95,33 +92,28 @@ public static class NotebookThumbnail
             maxY = Math.Max(maxY, sy1 + pad);
         }
 
-        // 枠に接して見えるのを避けるため外側に少し余白を足す。
-        const double outerMarginPt = 2.0;
-        minX -= outerMarginPt;
-        minY -= outerMarginPt;
-        maxX += outerMarginPt;
-        maxY += outerMarginPt;
+        // ページ中心をキャンバス中心に置きつつ、内容全体が収まるスケールを求める
+        // (中心から左右 / 上下の遠い側に合わせる)。
+        var centerX = snapshot.WidthPt / 2;
+        var centerY = snapshot.HeightPt / 2;
+        var halfW = Math.Max(centerX - minX, maxX - centerX);
+        var halfH = Math.Max(centerY - minY, maxY - centerY);
+        var pxPerPt = CanvasPixels / (2 * Math.Max(halfW, halfH));
+        var offsetX = CanvasPixels / 2 - centerX * pxPerPt;
+        var offsetY = CanvasPixels / 2 - centerY * pxPerPt;
 
-        var widthPt = Math.Max(1.0, maxX - minX);
-        var heightPt = Math.Max(1.0, maxY - minY);
-
-        // 長辺がキャンバス一辺に収まるスケール (極端な拡大 / 縮小をクランプ)。
-        var pxPerPt = CanvasPixels / Math.Max(widthPt, heightPt);
-        var widthPx = Math.Clamp((int)Math.Round(widthPt * pxPerPt), 1, 4096);
-        var heightPx = Math.Clamp((int)Math.Round(heightPt * pxPerPt), 1, 4096);
-
-        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), widthPx, heightPx, 96f);
+        var target = new CanvasRenderTarget(CanvasDevice.GetSharedDevice(), CanvasPixels, CanvasPixels, 96f);
         byte[] pixels;
         try
         {
             using (var session = target.CreateDrawingSession())
             {
-                // ノート外 (ページ矩形の外側) はホーム背景色。ページ矩形を白で塗り、形を見せる。
-                session.Clear(PageOutsideColor);
-                // pt 空間 → px 空間: スケール後に -min オフセットで平行移動 (PdfCanvas と同じ S*T 順)。
+                // ページ外は透明 (ホーム背景 / ホバーの上に直接ノートが浮かぶ)。
+                session.Clear(Colors.Transparent);
+                // pt 空間 → px 空間: スケール後に中央へ平行移動 (PdfCanvas と同じ S*T 順)。
                 session.Transform =
                     Matrix3x2.CreateScale((float)pxPerPt) *
-                    Matrix3x2.CreateTranslation((float)-minX, (float)-minY);
+                    Matrix3x2.CreateTranslation((float)offsetX, (float)offsetY);
                 session.FillRectangle(0f, 0f, (float)snapshot.WidthPt, (float)snapshot.HeightPt, Colors.White);
                 if (snapshot.Background == PageBackgroundKind.Grid)
                 {
@@ -141,7 +133,7 @@ public static class NotebookThumbnail
             target.Dispose();
         }
 
-        var bitmap = new WriteableBitmap(widthPx, heightPx);
+        var bitmap = new WriteableBitmap(CanvasPixels, CanvasPixels);
         using (var stream = bitmap.PixelBuffer.AsStream())
         {
             stream.Write(pixels, 0, pixels.Length);

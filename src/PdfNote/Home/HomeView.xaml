@@ -72,7 +72,7 @@
                             <FontIcon Glyph="&#xE8B7;" FontSize="120" Foreground="#FFB0B0B0"
                                       Visibility="{x:Bind FolderVisibility}" />
                             <!-- 1 ページ目サムネイル (正方形。縦長 / 横長どちらも同じ大きさに見える)。 -->
-                            <Border Background="#FF202020" Height="210" Width="210"
+                            <Border Background="Transparent" Height="210" Width="210"
                                     Visibility="{x:Bind NoteVisibility}">
                                 <Grid>
                                     <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
